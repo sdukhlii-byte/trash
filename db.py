@@ -80,6 +80,10 @@ async def init_db() -> None:
     from lava_payments import init_payments_db
     await init_payments_db()
 
+    # Инициализируем таблицу пушей
+    from retention import init_push_db
+    await init_push_db()
+
 
 async def close_db() -> None:
     global _pool

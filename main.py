@@ -68,7 +68,7 @@ def main() -> None:
         ])
         logger.info("Bot commands registered")
 
-        # Восстанавливаем дейли-задания
+        # Восстанавливаем дейли-задания пользователей
         from db import get_all_daily_users
         daily_users = await get_all_daily_users()
         for uid, settings in daily_users:
@@ -78,6 +78,11 @@ def main() -> None:
                 logger.info(f"Daily job restored for user {uid}")
             except Exception as e:
                 logger.warning(f"Could not restore daily job for {uid}: {e}")
+
+        # Retention пуши — ежедневно + почасовые предупреждения о триале
+        from retention import setup_retention_jobs
+        setup_retention_jobs(application)
+        logger.info("Retention jobs registered")
 
     async def post_shutdown(application: Application) -> None:
         await close_db()
