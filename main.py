@@ -131,6 +131,7 @@ def main() -> None:
 
         async def run():
             await app.initialize()
+            await post_init(app)  # вызываем вручную — в aiohttp-режиме PTB не зовёт его сам
             await app.bot.set_webhook(
                 url=WEBHOOK_URL,  # WEBHOOK_URL уже содержит /webhook
                 allowed_updates=Update.ALL_TYPES,
