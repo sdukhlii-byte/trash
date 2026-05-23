@@ -99,8 +99,10 @@ import os as _os
 async def _send_photo(update: Update, filename: str, caption: str, reply_markup=None) -> bool:
     """Отправляет фото из репо. Если не найдено — возвращает False."""
     _dirs = [_os.path.dirname(_os.path.abspath(__file__)), _os.getcwd()]
+    logger.info(f"[photo] looking for {filename} in {_dirs}")
     for _d in _dirs:
         _p = _os.path.join(_d, filename)
+        logger.info(f"[photo] checking {_p} exists={_os.path.exists(_p)}")
         if _os.path.exists(_p):
             try:
                 with open(_p, "rb") as _f:
@@ -108,9 +110,11 @@ async def _send_photo(update: Update, filename: str, caption: str, reply_markup=
                         photo=_f, caption=caption,
                         parse_mode="Markdown", reply_markup=reply_markup
                     )
+                logger.info(f"[photo] sent {filename} OK")
                 return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"[photo] send error {filename}: {e}")
+    logger.warning(f"[photo] {filename} not found, falling back to text")
     return False
 
 
