@@ -94,6 +94,26 @@ async def _typing_loop(chat_obj, stop_event: asyncio.Event) -> None:
         pass
 
 
+import os as _os
+
+async def _send_photo(update: Update, filename: str, caption: str, reply_markup=None) -> bool:
+    """Отправляет фото из репо. Если не найдено — возвращает False."""
+    _dirs = [_os.path.dirname(_os.path.abspath(__file__)), _os.getcwd()]
+    for _d in _dirs:
+        _p = _os.path.join(_d, filename)
+        if _os.path.exists(_p):
+            try:
+                with open(_p, "rb") as _f:
+                    await update.effective_chat.send_photo(
+                        photo=_f, caption=caption,
+                        parse_mode="Markdown", reply_markup=reply_markup
+                    )
+                return True
+            except Exception:
+                pass
+    return False
+
+
 # ── keyboards ─────────────────────────────────────────────────────────────────
 
 SUPPORT_USERNAME = "Stanley_Berks"  # без @
@@ -183,17 +203,19 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
                        parse_mode="Markdown", reply_markup=main_menu_kb())
         else:
             # Нет доступа — предлагаем триал (тёплый тон, первый контакт)
-            await send(update,
-                       f"*Запомнила.*\n\n"
-                       f"Знаю нишу, знаю аудиторию — теперь пишу под тебя, а не в общем.\n\n"
-                       f"*{TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса "
-                       f"и сама увидишь разницу. Без карты, без подвоха.",
-                       parse_mode="Markdown",
-                       reply_markup=kb(
-                           ["🎁 Активировать бесплатный доступ|sub_trial"],
-                           ["💳 Сразу оформить подписку|sub_pay"],
-                           ["ℹ️ Что умею?|sub_about"],
-                       ))
+            _caption = (
+                f"*Запомнила.*\n\n"
+                f"Знаю нишу, знаю аудиторию — теперь пишу под тебя, а не в общем.\n\n"
+                f"*{TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса "
+                f"и сама увидишь разницу. Без карты, без подвоха."
+            )
+            _kb = kb(
+                ["🎁 Активировать бесплатный доступ|sub_trial"],
+                ["💳 Сразу оформить подписку|sub_pay"],
+                ["ℹ️ Что умею?|sub_about"],
+            )
+            if not await _send_photo(update, "posti3.png", _caption, _kb):
+                await send(update, _caption, parse_mode="Markdown", reply_markup=_kb)
 
 async def _handle_onboarding(update: Update, user_id: int, text: str, state: dict) -> bool:
     idx  = state.get("step", 0)
@@ -689,20 +711,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
-        import os
-        _dirs = [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]
-        _photo_sent = False
-        for _d in _dirs:
-            _p = os.path.join(_d, "posti.png")
-            if os.path.exists(_p):
-                try:
-                    with open(_p, "rb") as _f:
-                        await update.effective_chat.send_photo(photo=_f, caption=MIRA_INTRO)
-                    _photo_sent = True
-                    break
-                except Exception:
-                    pass
-        if not _photo_sent:
+        if not await _send_photo(update, "posti.png", MIRA_INTRO):
             await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
         return
@@ -729,17 +738,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         p = await get_profile(user_id)
         niche    = profile_val(p, "niche")
         audience = profile_val(p, "audience")
-        try:
-            sent = await update.message.reply_text(
-                f"С возвращением.\n\nНиша: {niche} · Аудитория: {audience}\n\nЧто делаем?",
-                parse_mode="Markdown", reply_markup=main_menu_kb()
-            )
-        except Exception:
-            sent = await update.message.reply_text(
-                f"С возвращением.\n\nЧто делаем?",
-                reply_markup=main_menu_kb()
-            )
-        await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
+        _caption = f"С возвращением.\n\nНиша: {niche} · Аудитория: {audience}\n\nЧто делаем?"
+        _mk = main_menu_kb()
+        if not await _send_photo(update, "posti1.png", _caption, _mk):
+            try:
+                sent = await update.message.reply_text(_caption, parse_mode="Markdown", reply_markup=_mk)
+            except Exception:
+                sent = await update.message.reply_text("С возвращением.\n\nЧто делаем?", reply_markup=_mk)
+            await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
         return
 
     # ONBOARDED или EXPIRED — показываем paywall
@@ -852,25 +858,28 @@ async def _callback_inner(
         return
 
     elif data == "sub_about":
-        await edit(query,
-                   "*Вот что умею:*\n\n"
-                   "✍️ *Написать за меня* — пост в твоём голосе, не ChatGPT-глянец\n"
-                   "🎬 *Хуки для рилса* — заголовки которые останавливают скролл\n"
-                   "🎠 *Карусель* — структура + 20 вариантов заголовков\n"
-                   "📸 *Сторис* — цепочки которые досматривают до конца\n"
-                   "🎙 *Talking Head* — сценарий монолога в кадре\n"
-                   "🔥 *Прогрев* — серия которая ведёт к покупке без впаривания\n"
-                   "📅 *Контент-план TG* — на 7-14 дней\n"
-                   "🧠 *Мозговой штурм* — 10 идей за секунды\n\n"
-                   "Всё под твою нишу и аудиторию — я их уже знаю.\n\n"
-                   "SMM-щик от $150/мес. Курс $100 и устаревает. "
-                   f"Я — $30/мес, 24/7, в твоём голосе.\n\n"
-                   f"*{TRIAL_DAYS} дня бесплатно* — без карты.",
-                   parse_mode="Markdown",
-                   reply_markup=kb(
-                       ["🎁 Активировать бесплатный доступ|sub_trial"],
-                       ["💳 Оформить подписку|sub_pay"],
-                   ))
+        _about_text = (
+            "*Вот что умею:*\n\n"
+            "✍️ *Написать за меня* — пост в твоём голосе, не ChatGPT-глянец\n"
+            "🎬 *Хуки для рилса* — заголовки которые останавливают скролл\n"
+            "🎠 *Карусель* — структура + 20 вариантов заголовков\n"
+            "📸 *Сторис* — цепочки которые досматривают до конца\n"
+            "🎙 *Talking Head* — сценарий монолога в кадре\n"
+            "🔥 *Прогрев* — серия которая ведёт к покупке без впаривания\n"
+            "📅 *Контент-план TG* — на 7-14 дней\n"
+            "🧠 *Мозговой штурм* — 10 идей за секунды\n\n"
+            "Всё под твою нишу и аудиторию — я их уже знаю.\n\n"
+            "SMM-щик от $150/мес. Курс $100 и устаревает. "
+            f"Я — $30/мес, 24/7, в твоём голосе.\n\n"
+            f"*{TRIAL_DAYS} дня бесплатно* — без карты."
+        )
+        _about_kb = kb(
+            ["🎁 Активировать бесплатный доступ|sub_trial"],
+            ["💳 Оформить подписку|sub_pay"],
+        )
+        await query.message.delete()
+        if not await _send_photo(update, "posti2.png", _about_text, _about_kb):
+            await send(update, _about_text, parse_mode="Markdown", reply_markup=_about_kb)
         return
 
     elif data == "sub_pay":
