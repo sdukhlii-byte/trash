@@ -99,21 +99,20 @@ SUPPORT_USERNAME = "Stanley_Berks"  # без @
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     return kb(
-        # ── Инструменты ──
-        ["✍️ Постовик|agent_start_post",             "📸 Сторисмау|agent_start_stories"],
-        ["🎬 Рилс-коротышка|flow_reels_short",       "🎠 Каруселькин|flow_carousel"],
-        ["🎙 Разговорные рилс|agent_start_talking_head"],
-        ["🔥 Сценарист прогрева|agent_start_warmup"],
-        ["🔄 Рилс-адаптация|agent_start_reels_adapt"],
-        ["🎭 Агент по мультикам|agent_start_cartoon", "🔎 Разбор конкурента|agent_start_competitor"],
-        ["🐍 Змей-Телеграммыч|agent_start_tg_plan"],
-        ["🔍 Анализ профиля|agent_start_profile",    "💡 10 идей быстро|quick_ideas"],
-        # ── Планирование ──
-        ["📅 Планировщик|planner_show",              "☀️ Дейли-режим|daily_menu"],
-        ["📚 Мои материалы|my_results",              "📊 Прогресс|my_stats"],
-        # ── Кабинет ──
-        ["👤 Личный кабинет|sub_cabinet",            "⚙️ Профиль|menu_profile"],
-        ["🛠 Редактор промптов|pe_menu",             "💬 Чат|mode_chat"],
+        # ── Создание контента ──
+        ["✍️ Постовик|agent_start_post",              "📸 Сторисмау|agent_start_stories"],
+        ["🎬 Рилс-коротышка|flow_reels_short",        "🎠 Каруселькин|flow_carousel"],
+        ["🎙 Разговорные рилс|agent_start_talking_head", "🔥 Сценарист прогрева|agent_start_warmup"],
+        ["🔄 Рилс-адаптация|agent_start_reels_adapt", "🎭 Агент по мультикам|agent_start_cartoon"],
+        ["🐍 Змей-Телеграммыч|agent_start_tg_plan",   "🔎 Разбор конкурента|agent_start_competitor"],
+        ["🔍 Анализ профиля|agent_start_profile",     "💡 10 идей быстро|quick_ideas"],
+        # ── AI-инструменты ──
+        ["💬 Чат с AI|mode_chat"],
+        ["📅 Планировщик|planner_show",               "☀️ Дейли-режим|daily_menu"],
+        ["📚 Мои материалы|my_results",               "📊 Прогресс|my_stats"],
+        # ── Личное ──
+        ["👤 Личный кабинет|sub_cabinet",             "⚙️ Профиль|menu_profile"],
+        ["🛠 Редактор промптов|pe_menu"],
         ["🆘 Поддержка|support"],
     )
 
