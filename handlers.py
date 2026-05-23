@@ -112,15 +112,17 @@ def _protect(user_id: int, system: str) -> str:
 def main_menu_kb() -> InlineKeyboardMarkup:
     return kb(
         # ── Создание контента ──
-        ["✍️ Написать за меня|agent_start_post",          "📸 Сторис|agent_start_stories"],
+        ["✍️ Написать за меня|agent_start_post"],
         ["🎬 Хуки для рилса|flow_reels_short",            "🎠 Карусель|flow_carousel"],
-        ["🎙 Talking Head|agent_start_talking_head",      "🔥 Прогрев|agent_start_warmup"],
-        ["🔄 Адаптация рилса|agent_start_reels_adapt",   "🎭 Анимация|agent_start_cartoon"],
-        ["📅 Контент-план TG|agent_start_tg_plan",       "🔎 Разбор конкурента|agent_start_competitor"],
-        ["🔍 Разбор профиля|agent_start_profile",        "🧠 Мозговой штурм|quick_ideas"],
+        ["📸 Сторис|agent_start_stories",                 "🔥 Прогрев|agent_start_warmup"],
+        ["🎙 Talking Head|agent_start_talking_head",      "🎭 Анимация|agent_start_cartoon"],
+        ["🔄 Адаптация рилса|agent_start_reels_adapt"],
+        ["📅 Контент-план TG|agent_start_tg_plan"],
+        ["🔎 Разбор конкурента|agent_start_competitor",   "🔍 Разбор профиля|agent_start_profile"],
+        ["🧠 Мозговой штурм|quick_ideas"],
         # ── AI-инструменты ──
         ["💬 Спроси продюсера|mode_chat"],
-        ["🗓 Контент-план|planner_show",                  "☀️ Утренний брифинг|daily_menu"],
+        ["🗓 Контент-план|planner_show",                  "☀️ Брифинг|daily_menu"],
         ["🗂 Моя база|my_results",                       "📈 Мой рост|my_stats"],
         # ── Личное ──
         ["👤 Личный кабинет|sub_cabinet",                "🎭 Мой голос|menu_profile"],
@@ -690,11 +692,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
         try:
-            with open("posti.png", "rb") as photo:
-                await update.effective_chat.send_photo(
-                    photo=photo,
-                    caption=MIRA_INTRO,
-                )
+            await update.effective_chat.send_photo(
+                photo="https://raw.githubusercontent.com/sdukhlii-byte/trash/main/posti.png",
+                caption=MIRA_INTRO,
+            )
         except Exception:
             await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
