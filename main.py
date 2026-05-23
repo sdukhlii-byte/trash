@@ -1,16 +1,20 @@
+import asyncio
 import logging
 import registry  # регистрирует все 9 агентов при импорте
 
+from aiohttp import web
 from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters,
 )
 
+from lava_payments import setup_lava_webhook
+
 from config import TELEGRAM_TOKEN, LLM_SEMAPHORE_SIZE, WEBHOOK_URL, PORT
 from db import init_db, close_db
 from handlers import (
-    cmd_start, cmd_menu, cmd_clear, cmd_reset,
+    cmd_start, cmd_menu, cmd_clear, cmd_reset, cmd_subscribe,
     callback, handle_text, handle_voice, handle_photo,
     error_handler,
     _schedule_daily,
@@ -55,10 +59,11 @@ def main() -> None:
 
         # Регистрируем команды — появятся в меню "/" в Telegram
         await application.bot.set_my_commands([
-            BotCommand("menu",  "☰ Главное меню"),
-            BotCommand("start", "🚀 Начать / перезапустить"),
-            BotCommand("clear", "🗑 Очистить историю чата"),
-            BotCommand("reset", "♻️ Сбросить профиль"),
+            BotCommand("menu",      "☰ Главное меню"),
+            BotCommand("start",     "🚀 Начать / перезапустить"),
+            BotCommand("subscribe", "💳 Подписка"),
+            BotCommand("clear",     "🗑 Очистить историю чата"),
+            BotCommand("reset",     "♻️ Сбросить профиль"),
         ])
         logger.info("Bot commands registered")
 
@@ -81,10 +86,11 @@ def main() -> None:
     app.post_init = post_init
     app.post_shutdown = post_shutdown
 
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("menu",   cmd_menu))
-    app.add_handler(CommandHandler("clear",  cmd_clear))
-    app.add_handler(CommandHandler("reset",  cmd_reset))
+    app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("menu",      cmd_menu))
+    app.add_handler(CommandHandler("clear",     cmd_clear))
+    app.add_handler(CommandHandler("reset",     cmd_reset))
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
@@ -93,18 +99,58 @@ def main() -> None:
 
     if WEBHOOK_URL:
         # ── Webhook mode (Railway / production) ──────────────────────────────
-        logger.info(f"Starting webhook on port {PORT}: {WEBHOOK_URL}")
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path="webhook",
-            webhook_url=WEBHOOK_URL,
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-        )
+        logger.info(f"Starting webhook+aiohttp on port {PORT}: {WEBHOOK_URL}")
+
+        aio_app = web.Application()
+
+        # Lava.top вебхук
+        setup_lava_webhook(aio_app, app.bot)
+
+        # Telegram webhook endpoint
+        async def tg_webhook(request: web.Request) -> web.Response:
+            try:
+                data = await request.json()
+                update = Update.de_json(data, app.bot)
+                await app.process_update(update)
+            except Exception as e:
+                logger.error(f"tg_webhook error: {e}", exc_info=True)
+            return web.Response(status=200)
+
+        aio_app.router.add_post("/webhook", tg_webhook)
+
+        async def run():
+            await app.initialize()
+            await app.bot.set_webhook(
+                url=f"{WEBHOOK_URL}/webhook",
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+            )
+            await app.start()
+
+            runner = web.AppRunner(aio_app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", PORT)
+            await site.start()
+
+            logger.info(f"aiohttp listening on :{PORT}")
+            logger.info(f"Telegram webhook: {WEBHOOK_URL}/webhook")
+            logger.info(f"Lava webhook:     {WEBHOOK_URL}/lava/webhook")
+
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            except (KeyboardInterrupt, SystemExit):
+                pass
+            finally:
+                await app.stop()
+                await app.shutdown()
+                await runner.cleanup()
+
+        asyncio.run(run())
+
     else:
         # ── Polling mode (local dev) ──────────────────────────────────────────
-        logger.info("Starting polling (no RAILWAY_PUBLIC_DOMAIN set)")
+        logger.info("Starting polling (no WEBHOOK_URL set)")
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,

@@ -76,6 +76,10 @@ async def init_db() -> None:
 
     logger.info("Postgres pool ready")
 
+    # Инициализируем таблицы платёжной системы
+    from lava_payments import init_payments_db
+    await init_payments_db()
+
 
 async def close_db() -> None:
     global _pool

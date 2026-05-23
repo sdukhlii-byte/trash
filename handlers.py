@@ -54,6 +54,14 @@ from prompt_editor import (
     pe_save_text, pe_reset, get_category_for_slug, get_prompt,
     _PE_KEY, PROMPT_REGISTRY,
 )
+from lava_payments import (
+    is_subscribed, has_used_trial, grant_trial,
+    get_subscription, get_trial,
+    get_payment_link, register_referral,
+    subscription_menu_kb, cabinet_kb,
+    render_status, render_history, render_referral,
+    TRIAL_DAYS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +105,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         ["💡 10 идей быстро|quick_ideas"],
         ["📅 Планировщик|planner_show",              "☀️ Дейли-режим|daily_menu"],
         ["📚 Мои материалы|my_results",              "📊 Прогресс|my_stats"],
-        ["⚙️ Профиль|menu_profile"],
+        ["⚙️ Профиль|menu_profile",                  "💳 Кабинет|sub_cabinet"],
         ["🛠 Редактор промптов|pe_menu"],
         ["💬 Чат|mode_chat"],
     )
@@ -533,9 +541,45 @@ async def _car_route_text(update: Update, user_id: int, text: str, s: dict) -> N
 
 # ── commands ──────────────────────────────────────────────────────────────────
 
+async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /subscribe — показывает кабинет подписки."""
+    user_id = update.effective_user.id
+    await _show_cabinet(update, user_id)
+
+
+async def _show_cabinet(update, user_id: int) -> None:
+    """Показывает главный экран кабинета."""
+    status_text = await render_status(user_id)
+    used_trial = await has_used_trial(user_id)
+    sub = await get_subscription(user_id)
+
+    from utils import kb
+    rows = []
+    if not sub and not used_trial:
+        rows.append(["🎁 Активировать 3 дня бесплатно|sub_trial"])
+    if not sub or True:  # кнопка оплаты всегда
+        rows.append(["💳 Оформить подписку|sub_pay"])
+    rows.append(["🧾 История платежей|cab_history"])
+    rows.append(["👥 Реферальная программа|cab_referral"])
+    rows.append(["← Меню|menu_main"])
+
+    await send(update, f"💳 *Кабинет*\n\n{status_text}",
+               parse_mode="Markdown", reply_markup=kb(*rows))
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     logger.info(f"[cmd_start] user={user_id}")
+
+    # Обработка реф-ссылки: /start ref_XXXXXXXX
+    if ctx.args:
+        arg = ctx.args[0]
+        if arg.startswith("ref_"):
+            ref_code = arg[4:]
+            try:
+                await register_referral(user_id, ref_code)
+            except Exception as e:
+                logger.warning(f"register_referral error: {e}")
     onb     = await get_onboarding_state(user_id)
     if onb:
         await clear_onboarding_state(user_id)
@@ -635,6 +679,85 @@ async def _callback_inner(
     update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     query, user_id: int, data: str
 ) -> None:
+
+    # ── Подписка / Кабинет ────────────────────────────────────────────────────
+    if data == "sub_cabinet":
+        await _show_cabinet(update, user_id)
+        return
+
+    elif data == "sub_menu":
+        await _show_cabinet(update, user_id)
+        return
+
+    elif data == "sub_trial":
+        try:
+            await grant_trial(user_id)
+            await edit(query,
+                       f"🎁 *{TRIAL_DAYS} дня бесплатного доступа активированы!*\n\n"
+                       "Теперь у тебя полный доступ ко всем инструментам.\n"
+                       "Напиши /menu чтобы начать 🚀",
+                       parse_mode="Markdown",
+                       reply_markup=kb(["☰ Главное меню|menu_main"]))
+        except ValueError:
+            await edit(query,
+                       "❌ Пробный период уже был использован.\n\n"
+                       "Оформи подписку для продолжения.",
+                       parse_mode="Markdown",
+                       reply_markup=kb(["💳 Оформить подписку|sub_pay",
+                                        "← Назад|sub_cabinet"]))
+        return
+
+    elif data == "sub_pay":
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
+        link = get_payment_link(user_id)
+        if not link:
+            await edit(query,
+                       "❌ Ссылка на оплату не настроена. Обратись к администратору.",
+                       reply_markup=kb(["← Назад|sub_cabinet"]))
+            return
+        await edit(query,
+                   "💳 *Оформление подписки*\n\n"
+                   "На странице Lava выбери удобный период:\n\n"
+                   "• 1 месяц — €31\n"
+                   "• 3 месяца — €117 _(скидка 6%)_\n"
+                   "• 6 месяцев — €234 _(скидка 10%)_\n"
+                   "• 12 месяцев — €468 _(скидка 13%)_\n\n"
+                   "_После оплаты доступ активируется автоматически_ ✅",
+                   parse_mode="Markdown",
+                   reply_markup=IKM([
+                       [InlineKeyboardButton("💳 Перейти к оплате", url=link)],
+                       [InlineKeyboardButton("← Назад", callback_data="sub_cabinet")],
+                   ]))
+        return
+
+    elif data == "cab_status":
+        status_text = await render_status(user_id)
+        used_trial = await has_used_trial(user_id)
+        sub = await get_subscription(user_id)
+        rows = []
+        if not sub and not used_trial:
+            rows.append(["🎁 Активировать 3 дня бесплатно|sub_trial"])
+        rows.append(["💳 Оформить / продлить|sub_pay"])
+        rows.append(["← Кабинет|sub_cabinet"])
+        await edit(query, status_text, parse_mode="Markdown", reply_markup=kb(*rows))
+        return
+
+    elif data == "cab_history":
+        history_text = await render_history(user_id)
+        await edit(query, history_text, parse_mode="Markdown",
+                   reply_markup=kb(["← Кабинет|sub_cabinet"]))
+        return
+
+    elif data == "cab_referral":
+        ref_text, ref_link = await render_referral(user_id)
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
+        await edit(query, ref_text, parse_mode="Markdown",
+                   reply_markup=IKM([
+                       [InlineKeyboardButton("📤 Поделиться ссылкой",
+                                             switch_inline_query=ref_link)],
+                       [InlineKeyboardButton("← Кабинет", callback_data="sub_cabinet")],
+                   ]))
+        return
 
     # ── menu ──
     if data == "menu_main":
@@ -1260,6 +1383,31 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             await save_onboarding_state(user_id, state)
             await _onb_next(update, user_id, state)
             return
+
+    # ── PAYWALL ───────────────────────────────────────────────────────────────
+    if not await is_subscribed(user_id):
+        used_trial = await has_used_trial(user_id)
+        if used_trial:
+            await send(update,
+                       "🔒 *Доступ закрыт*\n\n"
+                       "Твой пробный период закончился.\n"
+                       "Оформи подписку чтобы продолжить 👇",
+                       parse_mode="Markdown",
+                       reply_markup=kb(
+                           ["💳 Оформить подписку|sub_pay"],
+                           ["📋 Кабинет|sub_cabinet"],
+                       ))
+        else:
+            await send(update,
+                       "🔒 *Доступ закрыт*\n\n"
+                       f"У тебя есть *{TRIAL_DAYS} дня бесплатного доступа* — активируй!\n\n"
+                       "Или сразу оформи подписку.",
+                       parse_mode="Markdown",
+                       reply_markup=kb(
+                           ["🎁 Активировать бесплатно|sub_trial"],
+                           ["💳 Оформить подписку|sub_pay"],
+                       ))
+        return
 
     # 2_voice. Ожидаем отредактированный текст голосового
     if await kv_get(user_id, "__voice_edit_mode__"):
