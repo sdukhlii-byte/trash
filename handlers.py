@@ -648,7 +648,7 @@ async def _show_paywall(update, user_id: int, state: UserState = None) -> None:
                    ))
     elif state == UserState.EXPIRED:
         await send(update,
-                   "Ало, доступ закончился.\n\n"
+                   "Доступ закончился.\n\n"
                    "Всё что создавала — никуда не делось, ждёт тебя.\n\n"
                    "€1 в день. Меньше кофе который ты всё равно не допиваешь.",
                    parse_mode="Markdown",
@@ -853,7 +853,7 @@ async def _callback_inner(
 
     elif data == "sub_about":
         await edit(query,
-                   "*Ало, вот что умею:*\n\n"
+                   "*Вот что умею:*\n\n"
                    "✍️ *Написать за меня* — пост в твоём голосе, не ChatGPT-глянец\n"
                    "🎬 *Хуки для рилса* — заголовки которые останавливают скролл\n"
                    "🎠 *Карусель* — структура + 20 вариантов заголовков\n"
