@@ -155,9 +155,30 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
         profile = {**state.get("data", {}), "onboarded": True}
         await save_profile(user_id, profile)
         await clear_onboarding_state(user_id)
-        await send(update,
-                   "✅ *Готово!* Теперь я знаю твою нишу и аудиторию.\n\nЧто делаем?",
-                   parse_mode="Markdown", reply_markup=main_menu_kb())
+
+        # ── После онбординга — проверяем доступ через машину состояний ──────
+        # Нельзя сразу показывать меню — это обход paywall!
+        from user_state import get_user_state, has_access, UserState
+        new_state = await get_user_state(user_id)
+
+        if has_access(new_state):
+            # Уже есть подписка или триал (например вернулся старый юзер)
+            await send(update,
+                       "✅ *Готово!* Профиль обновлён.\n\nЧто делаем?",
+                       parse_mode="Markdown", reply_markup=main_menu_kb())
+        else:
+            # Нет доступа — предлагаем триал (тёплый тон, первый контакт)
+            await send(update,
+                       f"✅ *Отлично, я тебя запомнил!*\n\n"
+                       f"Теперь активируй *{TRIAL_DAYS} дня бесплатного доступа* "
+                       f"— попробуй все инструменты без оплаты.\n\n"
+                       f"Или сразу оформи подписку — и начинаем.",
+                       parse_mode="Markdown",
+                       reply_markup=kb(
+                           ["🎁 Активировать бесплатный доступ|sub_trial"],
+                           ["💳 Оформить подписку|sub_pay"],
+                           ["👤 Узнать подробнее|sub_cabinet"],
+                       ))
 
 async def _handle_onboarding(update: Update, user_id: int, text: str, state: dict) -> bool:
     idx  = state.get("step", 0)
@@ -732,7 +753,14 @@ async def _show_menu(update: Update, user_id: int) -> None:
 async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     await clear_all(user_id)
-    await send(update, "🗑 Всё очищено.", reply_markup=main_menu_kb())
+    # Очистка истории не влияет на подписку — проверяем доступ
+    from user_state import get_user_state, has_access
+    state = await get_user_state(user_id)
+    if has_access(state):
+        await send(update, "🗑 История очищена.", reply_markup=main_menu_kb())
+    else:
+        await send(update, "🗑 История очищена.")
+        await _show_paywall(update, user_id, state)
 
 async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Полный сброс: история + сессии + профиль + модель → онбординг заново."""
@@ -1400,10 +1428,14 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     raw     = update.message.text or ""
 
-    # Команда /menu или текст "☰ Меню" — показываем меню
+    # Команда /menu или текст "☰ Меню"
     if raw.strip() in ("☰ Меню", "/menu"):
         await clear_all_agent_sessions(user_id)
-        await _show_menu(update, user_id)
+        state = await get_user_state(user_id)
+        if not has_access(state):
+            await _show_paywall(update, user_id, state)
+        else:
+            await _show_menu(update, user_id)
         return
 
     logger.info(f"[handle_text] user={user_id} raw={raw[:50]!r}")
@@ -1426,6 +1458,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Голосовое сообщение → Whisper → маршрутизация как текст."""
     user_id = update.effective_user.id
+
+    # ── PAYWALL: голос тоже платная функция ──────────────────────────────────
+    state = await get_user_state(user_id)
+    if not has_access(state):
+        await _show_paywall(update, user_id, state)
+        return
 
     status = await update.message.reply_text("🎙 Расшифровываю...")
     try:
@@ -1723,15 +1761,15 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Универсальный обработчик фотографий.
-
-    Приоритеты:
-    1. Активный generic-агент (любой шаг interview / await_photos)
-    2. Активный flow Рилс-адаптации — скрин рилса конкурента
-    3. Активный flow Каруселькин — скрин во время интервью
-    4. Чат-режим — «что здесь написано / что на фото?»
-    5. Без контекста — универсальный разбор + подсказка меню
     """
     user_id = update.effective_user.id
+
+    # ── PAYWALL ───────────────────────────────────────────────────────────────
+    state = await get_user_state(user_id)
+    if not has_access(state):
+        await _show_paywall(update, user_id, state)
+        return
+
     caption = (update.message.caption or "").strip()
 
     # ── 1. Generic-агент ──────────────────────────────────────────────────────
