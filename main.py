@@ -14,7 +14,7 @@ from lava_payments import setup_lava_webhook
 from config import TELEGRAM_TOKEN, LLM_SEMAPHORE_SIZE, WEBHOOK_URL, PORT
 from db import init_db, close_db
 from handlers import (
-    cmd_start, cmd_menu, cmd_clear, cmd_reset, cmd_subscribe,
+    cmd_start, cmd_menu, cmd_clear, cmd_reset, cmd_subscribe, cmd_support,
     callback, handle_text, handle_voice, handle_photo,
     error_handler,
     _schedule_daily,
@@ -61,7 +61,8 @@ def main() -> None:
         await application.bot.set_my_commands([
             BotCommand("menu",      "☰ Главное меню"),
             BotCommand("start",     "🚀 Начать / перезапустить"),
-            BotCommand("subscribe", "💳 Подписка"),
+            BotCommand("subscribe", "👤 Личный кабинет"),
+            BotCommand("support",   "🆘 Поддержка"),
             BotCommand("clear",     "🗑 Очистить историю чата"),
             BotCommand("reset",     "♻️ Сбросить профиль"),
         ])
@@ -91,6 +92,7 @@ def main() -> None:
     app.add_handler(CommandHandler("clear",     cmd_clear))
     app.add_handler(CommandHandler("reset",     cmd_reset))
     app.add_handler(CommandHandler("subscribe", cmd_subscribe))
+    app.add_handler(CommandHandler("support",   cmd_support))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

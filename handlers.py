@@ -62,6 +62,7 @@ from lava_payments import (
     render_status, render_history, render_referral,
     TRIAL_DAYS,
 )
+from user_state import get_user_state, has_access, UserState
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ async def _typing_loop(chat_obj, stop_event: asyncio.Event) -> None:
 
 # ── keyboards ─────────────────────────────────────────────────────────────────
 
+SUPPORT_USERNAME = "Stanley_Berks"  # без @
+
 def main_menu_kb() -> InlineKeyboardMarkup:
     return kb(
         ["🔍 Анализ профиля|agent_start_profile"],
@@ -105,9 +108,9 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         ["💡 10 идей быстро|quick_ideas"],
         ["📅 Планировщик|planner_show",              "☀️ Дейли-режим|daily_menu"],
         ["📚 Мои материалы|my_results",              "📊 Прогресс|my_stats"],
-        ["⚙️ Профиль|menu_profile",                  "💳 Кабинет|sub_cabinet"],
-        ["🛠 Редактор промптов|pe_menu"],
-        ["💬 Чат|mode_chat"],
+        ["👤 Личный кабинет|sub_cabinet",            "⚙️ Профиль|menu_profile"],
+        ["🛠 Редактор промптов|pe_menu",             "💬 Чат|mode_chat"],
+        ["🆘 Поддержка|support"],
     )
 
 def model_kb(current: str) -> InlineKeyboardMarkup:
@@ -541,30 +544,92 @@ async def _car_route_text(update: Update, user_id: int, text: str, s: dict) -> N
 
 # ── commands ──────────────────────────────────────────────────────────────────
 
+async def cmd_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда /support — контакт поддержки."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
+    await send(update,
+               f"🆘 *Поддержка*\n\n"
+               f"Если возникли вопросы по работе бота или оплате — пиши напрямую.\n\n"
+               f"Менеджер: @{SUPPORT_USERNAME}",
+               parse_mode="Markdown",
+               reply_markup=IKM([
+                   [InlineKeyboardButton(f"💬 Написать @{SUPPORT_USERNAME}",
+                                         url=f"https://t.me/{SUPPORT_USERNAME}")],
+               ]))
+
+
 async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Команда /subscribe — показывает кабинет подписки."""
+    """Команда /subscribe → личный кабинет."""
     user_id = update.effective_user.id
     await _show_cabinet(update, user_id)
 
 
 async def _show_cabinet(update, user_id: int) -> None:
-    """Показывает главный экран кабинета."""
+    """Личный кабинет — адаптируется под текущее состояние."""
+    state = await get_user_state(user_id)
     status_text = await render_status(user_id)
-    used_trial = await has_used_trial(user_id)
     sub = await get_subscription(user_id)
+    trial = await get_trial(user_id)
 
-    from utils import kb
     rows = []
-    if not sub and not used_trial:
+    if state == UserState.ONBOARDED:
         rows.append(["🎁 Активировать 3 дня бесплатно|sub_trial"])
-    if not sub or True:  # кнопка оплаты всегда
         rows.append(["💳 Оформить подписку|sub_pay"])
+    elif state == UserState.TRIAL:
+        rows.append(["💳 Оформить подписку|sub_pay"])
+    elif state == UserState.SUBSCRIBED:
+        rows.append(["💳 Продлить подписку|sub_pay"])
+    elif state == UserState.EXPIRED:
+        rows.append(["🔄 Возобновить подписку|sub_pay"])
+
     rows.append(["🧾 История платежей|cab_history"])
     rows.append(["👥 Реферальная программа|cab_referral"])
     rows.append(["← Меню|menu_main"])
 
-    await send(update, f"💳 *Кабинет*\n\n{status_text}",
+    await send(update, f"👤 *Личный кабинет*\n\n{status_text}",
                parse_mode="Markdown", reply_markup=kb(*rows))
+
+
+async def _show_paywall(update, user_id: int, state: UserState = None) -> None:
+    """
+    Экран paywall — разный для каждого состояния.
+    Новый пользователь и истёкший — разные сообщения.
+    """
+    if state is None:
+        state = await get_user_state(user_id)
+
+    if state == UserState.ONBOARDED:
+        # Первый раз видит paywall — тёплый тон, предлагаем триал
+        await send(update,
+                   f"🔒 *Доступ к инструментам — по подписке*\n\n"
+                   f"Попробуй *{TRIAL_DAYS} дня бесплатно* — без карты, без обязательств.\n\n"
+                   f"После триала — выбери удобный тариф и продолжай работать.",
+                   parse_mode="Markdown",
+                   reply_markup=kb(
+                       ["🎁 Начать бесплатный период|sub_trial"],
+                       ["💳 Сразу оформить подписку|sub_pay"],
+                       ["👤 Личный кабинет|sub_cabinet"],
+                   ))
+    elif state == UserState.EXPIRED:
+        # Уже пробовал — знает продукт, нужен другой тон
+        await send(update,
+                   "⏰ *Доступ закончился*\n\n"
+                   "Твой период истёк. Оформи подписку чтобы продолжить работу со всеми инструментами.\n\n"
+                   "_Все твои материалы и история сохранены_ 📁",
+                   parse_mode="Markdown",
+                   reply_markup=kb(
+                       ["🔄 Возобновить подписку|sub_pay"],
+                       ["👤 Личный кабинет|sub_cabinet"],
+                   ))
+    else:
+        # Fallback
+        await send(update,
+                   "🔒 *Доступ закрыт*\n\nОформи подписку чтобы продолжить.",
+                   parse_mode="Markdown",
+                   reply_markup=kb(
+                       ["💳 Оформить подписку|sub_pay"],
+                       ["👤 Личный кабинет|sub_cabinet"],
+                   ))
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -580,44 +645,67 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await register_referral(user_id, ref_code)
             except Exception as e:
                 logger.warning(f"register_referral error: {e}")
-    onb     = await get_onboarding_state(user_id)
-    if onb:
-        await clear_onboarding_state(user_id)
 
-    if not await is_onboarded(user_id):
+    state = await get_user_state(user_id)
+
+    # NEW — запускаем онбординг
+    if state == UserState.NEW:
+        onb = await get_onboarding_state(user_id)
+        if onb:
+            await clear_onboarding_state(user_id)
+        new_state = {"step": 0, "data": {}}
+        await save_onboarding_state(user_id, new_state)
+        await _onb_next(update, user_id, new_state)
+        return
+
+    # TRIAL — полный доступ, показываем меню с баннером
+    if state == UserState.TRIAL:
+        trial = await get_trial(user_id)
+        expires_str = ""
+        if trial:
+            from datetime import datetime, timezone
+            exp = datetime.fromisoformat(trial["expires_at"])
+            days_left = max(0, (exp - datetime.now(timezone.utc)).days)
+            expires_str = f"\n\n⏳ _Пробный период: осталось {days_left} дн._"
         p = await get_profile(user_id)
-        if p.get("niche"):
-            p["onboarded"] = True
-            await save_profile(user_id, p)
-        else:
-            state = {"step": 0, "data": {}}
-            await save_onboarding_state(user_id, state)
-            await _onb_next(update, user_id, state)
-            return
+        sent = await update.message.reply_text(
+            f"👋 Привет! Твой бесплатный период активен.{expires_str}\n\nЧто делаем?",
+            parse_mode="Markdown", reply_markup=main_menu_kb()
+        )
+        await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
+        return
 
-    if True:  # already onboarded
+    # SUBSCRIBED — полный доступ, обычное приветствие
+    if state == UserState.SUBSCRIBED:
         p = await get_profile(user_id)
         niche    = profile_val(p, "niche")
         audience = profile_val(p, "audience")
         try:
             sent = await update.message.reply_text(
-                f"👋 Снова здесь!\n\n"
-                f"Ниша: {niche}\n"
-                f"Аудитория: {audience}\n\nЧто делаем?",
+                f"👋 Снова здесь!\n\nНиша: {niche}\nАудитория: {audience}\n\nЧто делаем?",
                 parse_mode="Markdown", reply_markup=main_menu_kb()
             )
         except Exception:
-            # Fallback без Markdown если профиль содержит проблемные символы
             sent = await update.message.reply_text(
-                f"👋 Снова здесь!\n\n"
-                f"Ниша: {p.get('niche','—')}\n"
-                f"Аудитория: {p.get('audience','—')}\n\nЧто делаем?",
+                f"👋 Снова здесь!\n\nЧто делаем?",
                 reply_markup=main_menu_kb()
             )
         await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
+        return
+
+    # ONBOARDED или EXPIRED — показываем paywall
+    await _show_paywall(update, user_id, state)
+
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    state = await get_user_state(user_id)
+    if state == UserState.NEW:
+        await cmd_start(update, ctx)
+        return
+    if not has_access(state):
+        await _show_paywall(update, user_id, state)
+        return
     await _show_menu(update, user_id)
 
 
@@ -756,6 +844,27 @@ async def _callback_inner(
                        [InlineKeyboardButton("📤 Поделиться ссылкой",
                                              switch_inline_query=ref_link)],
                        [InlineKeyboardButton("← Кабинет", callback_data="sub_cabinet")],
+                   ]))
+        return
+
+    # ── PAYWALL для всех остальных callbacks ──────────────────────────────────
+    _cb_state = await get_user_state(user_id)
+    if not has_access(_cb_state):
+        await _show_paywall(update, user_id, _cb_state)
+        return
+
+    # ── Поддержка ──
+    if data == "support":
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
+        await edit(query,
+                   f"🆘 *Поддержка*\n\n"
+                   f"Если возникли вопросы по работе бота или оплате — пиши напрямую.\n\n"
+                   f"Менеджер: @{SUPPORT_USERNAME}",
+                   parse_mode="Markdown",
+                   reply_markup=IKM([
+                       [InlineKeyboardButton(f"💬 Написать @{SUPPORT_USERNAME}",
+                                             url=f"https://t.me/{SUPPORT_USERNAME}")],
+                       [InlineKeyboardButton("← Меню", callback_data="menu_main")],
                    ]))
         return
 
@@ -1385,28 +1494,9 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             return
 
     # ── PAYWALL ───────────────────────────────────────────────────────────────
-    if not await is_subscribed(user_id):
-        used_trial = await has_used_trial(user_id)
-        if used_trial:
-            await send(update,
-                       "🔒 *Доступ закрыт*\n\n"
-                       "Твой пробный период закончился.\n"
-                       "Оформи подписку чтобы продолжить 👇",
-                       parse_mode="Markdown",
-                       reply_markup=kb(
-                           ["💳 Оформить подписку|sub_pay"],
-                           ["📋 Кабинет|sub_cabinet"],
-                       ))
-        else:
-            await send(update,
-                       "🔒 *Доступ закрыт*\n\n"
-                       f"У тебя есть *{TRIAL_DAYS} дня бесплатного доступа* — активируй!\n\n"
-                       "Или сразу оформи подписку.",
-                       parse_mode="Markdown",
-                       reply_markup=kb(
-                           ["🎁 Активировать бесплатно|sub_trial"],
-                           ["💳 Оформить подписку|sub_pay"],
-                       ))
+    _state = await get_user_state(user_id)
+    if not has_access(_state):
+        await _show_paywall(update, user_id, _state)
         return
 
     # 2_voice. Ожидаем отредактированный текст голосового
