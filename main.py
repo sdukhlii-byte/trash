@@ -121,7 +121,7 @@ def main() -> None:
         async def run():
             await app.initialize()
             await app.bot.set_webhook(
-                url=f"{WEBHOOK_URL}/webhook",
+                url=WEBHOOK_URL,  # WEBHOOK_URL уже содержит /webhook
                 allowed_updates=Update.ALL_TYPES,
                 drop_pending_updates=True,
             )
