@@ -177,7 +177,7 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
                        reply_markup=kb(
                            ["🎁 Активировать бесплатный доступ|sub_trial"],
                            ["💳 Сразу оформить подписку|sub_pay"],
-                           ["👤 Узнать подробнее|sub_cabinet"],
+                           ["ℹ️ Что умеет бот?|sub_about"],
                        ))
 
 async def _handle_onboarding(update: Update, user_id: int, text: str, state: dict) -> bool:
@@ -357,9 +357,9 @@ async def _car_check_trend(update: Update, user_id: int, topic: str, s: dict) ->
     except: pass
     s.update({"step": "trend_shown", "topic": topic, "trend": trend})
     await save_agent_session(user_id, _CAR_KEY, s)
-    await send(update, f"📊 *Оценка темы*\n\n{trend}", parse_mode="Markdown",
-               reply_markup=kb(["✅ Генерируй заголовки|car_headlines",
-                                 "✏️ Сменить тему|car_change_topic",
+    await send(update, f"📊 *Оценка темы*\n\n{trend}\n\n_Можешь сменить тему или продолжить с этой._", parse_mode="Markdown",
+               reply_markup=kb(["✅ Всё равно сделай|car_headlines",
+                                 "✏️ Изменить тему|car_change_topic",
                                  "← Меню|menu_main"]))
 
 async def _car_gen_headlines(update: Update, user_id: int, s: dict) -> None:
@@ -821,6 +821,26 @@ async def _callback_inner(
                        parse_mode="Markdown",
                        reply_markup=kb(["💳 Оформить подписку|sub_pay",
                                         "← Назад|sub_cabinet"]))
+        return
+
+    elif data == "sub_about":
+        await edit(query,
+                   "🎯 *Что умею:*\n\n"
+                   "📝 *Посты* — живые, без нейросетевого глянца\n"
+                   "🎬 *Рилсы* — хуки, заголовки, сценарии\n"
+                   "🎠 *Карусели* — структура + 20 вариантов заголовков\n"
+                   "📖 *Сторис* — цепочки слайдов с CTA\n"
+                   "🎙 *Разговорные видео* — сценарий монолога в кадре\n"
+                   "🔥 *Прогревы* — серии перед продажей\n"
+                   "📅 *Контент-план* — на 7-14 дней\n"
+                   "💡 *Быстрые идеи* — 10 тем за секунды\n\n"
+                   "Всё — под твою нишу и аудиторию, которые я уже знаю. "
+                   f"Попробуй *{TRIAL_DAYS} дня бесплатно* — без карты.",
+                   parse_mode="Markdown",
+                   reply_markup=kb(
+                       ["🎁 Активировать бесплатный доступ|sub_trial"],
+                       ["💳 Оформить подписку|sub_pay"],
+                   ))
         return
 
     elif data == "sub_pay":
@@ -1694,11 +1714,28 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             "agent": intent.agent, "text": text, "topic": intent.topic,
         }, ensure_ascii=False))
 
-        emoji_main = AGENT_EMOJI.get(intent.agent, "🤖")
-        name_main  = AGENT_NAMES.get(intent.agent, intent.agent)
         main_cb    = "flow_reels_short" if intent.agent == "reels_short" else \
                      "flow_carousel"    if intent.agent == "carousel"    else \
                      f"agent_start_{intent.agent}"
+
+        # Высокая уверенность — запускаем агента сразу, без picker-а
+        if intent.confidence >= 0.85:
+            spec = get_spec(intent.agent) if intent.agent not in ("reels_short", "carousel") else None
+            if intent.agent == "flow_reels_short" or intent.agent == "reels_short":
+                await clear_all_agent_sessions(user_id)
+                await _rs_start(update, user_id)
+                return
+            elif intent.agent == "carousel":
+                await clear_all_agent_sessions(user_id)
+                await _car_start(update, user_id)
+                return
+            elif spec:
+                await clear_all_agent_sessions(user_id)
+                await ag.start(update, user_id, spec)
+                return
+
+        emoji_main = AGENT_EMOJI.get(intent.agent, "🤖")
+        name_main  = AGENT_NAMES.get(intent.agent, intent.agent)
 
         rows = []
         # Основной агент
