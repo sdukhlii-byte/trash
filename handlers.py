@@ -111,15 +111,15 @@ def _protect(user_id: int, system: str) -> str:
 def main_menu_kb() -> InlineKeyboardMarkup:
     return kb(
         # ── Создание контента ──
-        ["✍️ Написать пост|agent_start_post",              "📸 Сторис|agent_start_stories"],
+        ["✍️ Написать за меня|agent_start_post",           "📸 Сторис|agent_start_stories"],
         ["🎬 Хуки для рилса|flow_reels_short",             "🎠 Карусель|flow_carousel"],
         ["🎙 Talking Head|agent_start_talking_head",       "🔥 Прогрев|agent_start_warmup"],
         ["🔄 Адаптация рилса|agent_start_reels_adapt",    "🎭 Анимация|agent_start_cartoon"],
         ["📅 Контент-план TG|agent_start_tg_plan",        "🔎 Разбор конкурента|agent_start_competitor"],
-        ["🔍 Разбор профиля|agent_start_profile",         "💡 Идеи для постов|quick_ideas"],
+        ["🔍 Разбор профиля|agent_start_profile",         "🧠 Мозговой штурм|quick_ideas"],
         # ── AI-инструменты ──
-        ["💬 Спросить продюсера|mode_chat"],
-        ["🗓 Планировщик|planner_show",                   "☀️ Утренний брифинг|daily_menu"],
+        ["💬 Спроси продюсера|mode_chat"],
+        ["🗓 Контент-план|planner_show",                   "☀️ Утренний брифинг|daily_menu"],
         ["🗂 Моя база|my_results",                        "📈 Мой рост|my_stats"],
         # ── Личное ──
         ["👤 Личный кабинет|sub_cabinet",                 "🎭 Мой голос|menu_profile"],
