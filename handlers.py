@@ -96,25 +96,27 @@ async def _typing_loop(chat_obj, stop_event: asyncio.Event) -> None:
 
 import os as _os
 
-async def _send_photo(update: Update, filename: str, caption: str, reply_markup=None) -> bool:
+async def _send_photo(update: Update, filename: str, caption: str, reply_markup=None, parse_mode: str = None) -> bool:
     """Отправляет фото из репо. Если не найдено — возвращает False."""
     _dirs = [_os.path.dirname(_os.path.abspath(__file__)), _os.getcwd()]
-    logger.info(f"[photo] looking for {filename} in {_dirs}")
     for _d in _dirs:
         _p = _os.path.join(_d, filename)
-        logger.info(f"[photo] checking {_p} exists={_os.path.exists(_p)}")
         if _os.path.exists(_p):
             try:
+                chat_id = update.effective_chat.id
                 with open(_p, "rb") as _f:
-                    await update.effective_chat.send_photo(
-                        photo=_f, caption=caption,
-                        parse_mode="Markdown", reply_markup=reply_markup
+                    await update.get_bot().send_photo(
+                        chat_id=chat_id,
+                        photo=_f,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
                     )
                 logger.info(f"[photo] sent {filename} OK")
                 return True
             except Exception as e:
                 logger.error(f"[photo] send error {filename}: {e}")
-    logger.warning(f"[photo] {filename} not found, falling back to text")
+    logger.warning(f"[photo] {filename} not found")
     return False
 
 
@@ -218,7 +220,7 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
                 ["💳 Сразу оформить подписку|sub_pay"],
                 ["ℹ️ Что умею?|sub_about"],
             )
-            if not await _send_photo(update, "posti3.png", _caption, _kb):
+            if not await _send_photo(update, "posti3.png", _caption, _kb, "Markdown"):
                 await send(update, _caption, parse_mode="Markdown", reply_markup=_kb)
 
 async def _handle_onboarding(update: Update, user_id: int, text: str, state: dict) -> bool:
@@ -715,7 +717,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
-        if not await _send_photo(update, "posti.png", MIRA_INTRO):
+        if not await _send_photo(update, "posti.png", MIRA_INTRO, None, None):
             await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
         return
@@ -729,12 +731,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             exp = datetime.fromisoformat(trial["expires_at"])
             days_left = max(0, (exp - datetime.now(timezone.utc)).days)
             expires_str = f"\n\n⏳ _Пробный период: осталось {days_left} дн._"
-        p = await get_profile(user_id)
-        sent = await update.message.reply_text(
-            f"Снова здесь{expires_str}\n\nЧто делаем?",
-            parse_mode="Markdown", reply_markup=main_menu_kb()
-        )
-        await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
+        _caption = f"Снова здесь{expires_str}\n\nЧто делаем?"
+        if not await _send_photo(update, "posti1.png", _caption, main_menu_kb()):
+            sent = await update.message.reply_text(
+                _caption, parse_mode="Markdown", reply_markup=main_menu_kb()
+            )
+            await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
         return
 
     # SUBSCRIBED — полный доступ, обычное приветствие
@@ -882,7 +884,7 @@ async def _callback_inner(
             ["💳 Оформить подписку|sub_pay"],
         )
         await query.message.delete()
-        if not await _send_photo(update, "posti2.png", _about_text, _about_kb):
+        if not await _send_photo(update, "posti2.png", _about_text, _about_kb, "Markdown"):
             await send(update, _about_text, parse_mode="Markdown", reply_markup=_about_kb)
         return
 
