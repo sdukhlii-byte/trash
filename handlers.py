@@ -111,20 +111,18 @@ def _protect(user_id: int, system: str) -> str:
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     return kb(
-        # ── Создание контента ──
         ["✍️ Написать за меня|agent_start_post"],
         ["🎬 Хуки для рилса|flow_reels_short",            "🎠 Карусель|flow_carousel"],
         ["📸 Сторис|agent_start_stories",                 "🔥 Прогрев|agent_start_warmup"],
         ["🎙 Talking Head|agent_start_talking_head",      "🎭 Анимация|agent_start_cartoon"],
         ["🔄 Адаптация рилса|agent_start_reels_adapt"],
         ["📅 Контент-план TG|agent_start_tg_plan"],
-        ["🔎 Разбор конкурента|agent_start_competitor",   "🔍 Разбор профиля|agent_start_profile"],
+        ["🔎 Разбор конкурента|agent_start_competitor"],
+        ["🔍 Разбор профиля|agent_start_profile"],
         ["🧠 Мозговой штурм|quick_ideas"],
-        # ── AI-инструменты ──
         ["💬 Спроси продюсера|mode_chat"],
         ["🗓 Контент-план|planner_show",                  "☀️ Брифинг|daily_menu"],
         ["🗂 Моя база|my_results",                       "📈 Мой рост|my_stats"],
-        # ── Личное ──
         ["👤 Личный кабинет|sub_cabinet",                "🎭 Мой голос|menu_profile"],
         ["🆘 Поддержка|support"],
     )
@@ -155,12 +153,12 @@ def carousel_trigger_kb() -> InlineKeyboardMarkup:
 # ── onboarding ────────────────────────────────────────────────────────────────
 _ONB_STEPS = ["niche", "audience", "tone"]
 _ONB_Q = {
-    "niche":    ("*Ало, с чем работаешь?*\n\n"
+    "niche":    ("*С чем работаешь?*\n\n"
                  "_Ниша, тема, экспертиза — как есть.\n"
                  "Фитнес, бьюти, психология, бизнес, коучинг — или что-то своё_"),
     "audience": ("*Кто твоя аудитория?*\n\n"
                  "_Конкретно. Не «все женщины» — а кто реально покупает._"),
-    "tone":     ("*Как ты говоришь со своей аудиторией?*\n\n"
+    "tone":     ("*Как говоришь со своей аудиторией?*\n\n"
                  "_Дерзко, экспертно, дружелюбно, с юмором — или всё вместе?_"),
 }
 
@@ -691,12 +689,20 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
-        try:
-            await update.effective_chat.send_photo(
-                photo="https://raw.githubusercontent.com/sdukhlii-byte/trash/main/posti.png",
-                caption=MIRA_INTRO,
-            )
-        except Exception:
+        import os
+        _dirs = [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]
+        _photo_sent = False
+        for _d in _dirs:
+            _p = os.path.join(_d, "posti.png")
+            if os.path.exists(_p):
+                try:
+                    with open(_p, "rb") as _f:
+                        await update.effective_chat.send_photo(photo=_f, caption=MIRA_INTRO)
+                    _photo_sent = True
+                    break
+                except Exception:
+                    pass
+        if not _photo_sent:
             await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
         return
