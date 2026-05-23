@@ -689,7 +689,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
-        await send(update, MIRA_INTRO)
+        try:
+            with open("posti.png", "rb") as photo:
+                await update.effective_chat.send_photo(
+                    photo=photo,
+                    caption=MIRA_INTRO,
+                )
+        except Exception:
+            await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
         return
 
