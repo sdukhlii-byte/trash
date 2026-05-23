@@ -111,18 +111,18 @@ def _protect(user_id: int, system: str) -> str:
 def main_menu_kb() -> InlineKeyboardMarkup:
     return kb(
         # ── Создание контента ──
-        ["✍️ Постовик|agent_start_post",              "📸 Сторисмау|agent_start_stories"],
-        ["🎬 Рилс-коротышка|flow_reels_short",        "🎠 Каруселькин|flow_carousel"],
-        ["🎙 Разговорные рилс|agent_start_talking_head", "🔥 Сценарист прогрева|agent_start_warmup"],
-        ["🔄 Рилс-адаптация|agent_start_reels_adapt", "🎭 Агент по мультикам|agent_start_cartoon"],
-        ["🐍 Змей-Телеграммыч|agent_start_tg_plan",   "🔎 Разбор конкурента|agent_start_competitor"],
-        ["🔍 Анализ профиля|agent_start_profile",     "💡 10 идей быстро|quick_ideas"],
+        ["✍️ Написать пост|agent_start_post",              "📸 Сторис|agent_start_stories"],
+        ["🎬 Хуки для рилса|flow_reels_short",             "🎠 Карусель|flow_carousel"],
+        ["🎙 Talking Head|agent_start_talking_head",       "🔥 Прогрев|agent_start_warmup"],
+        ["🔄 Адаптация рилса|agent_start_reels_adapt",    "🎭 Анимация|agent_start_cartoon"],
+        ["📅 Контент-план TG|agent_start_tg_plan",        "🔎 Разбор конкурента|agent_start_competitor"],
+        ["🔍 Разбор профиля|agent_start_profile",         "💡 Идеи для постов|quick_ideas"],
         # ── AI-инструменты ──
-        ["💬 Чат с AI|mode_chat"],
-        ["📅 Планировщик|planner_show",               "☀️ Дейли-режим|daily_menu"],
-        ["📚 Мои материалы|my_results",               "📊 Прогресс|my_stats"],
+        ["💬 Спросить продюсера|mode_chat"],
+        ["🗓 Планировщик|planner_show",                   "☀️ Утренний брифинг|daily_menu"],
+        ["🗂 Моя база|my_results",                        "📈 Мой рост|my_stats"],
         # ── Личное ──
-        ["👤 Личный кабинет|sub_cabinet",             "⚙️ Профиль|menu_profile"],
+        ["👤 Личный кабинет|sub_cabinet",                 "🎭 Мой голос|menu_profile"],
         ["🆘 Поддержка|support"],
     )
 
@@ -152,12 +152,12 @@ def carousel_trigger_kb() -> InlineKeyboardMarkup:
 # ── onboarding ────────────────────────────────────────────────────────────────
 _ONB_STEPS = ["niche", "audience", "tone"]
 _ONB_Q = {
-    "niche":    ("🎯 *Привет! Я твой карманный маркетолог.*\n\n"
-                 "Пара быстрых вопросов — буду работать точно под тебя.\n\n"
-                 "*В какой нише ты работаешь?*\n"
-                 "_Например: психология, фитнес, бьюти, бизнес..._"),
-    "audience": ("*Кто твоя аудитория?*\n_Например: женщины 25-35, предприниматели..._"),
-    "tone":     ("*Какой стиль подачи ближе?*\n_Например: дружелюбный, экспертный, дерзкий..._"),
+    "niche":    ("🎯 *Привет! Я твой AI-продюсер.*\n\n"
+                 "Пишу контент, строю стратегию, генерирую идеи — всё под твою нишу и голос.\n\n"
+                 "*С чем работаешь?*\n"
+                 "_Например: психология, фитнес, бьюти, бизнес, коучинг..._"),
+    "audience": ("*Кто твоя аудитория?*\n_Например: женщины 25-35, предприниматели, мамы в декрете..._"),
+    "tone":     ("*Какой стиль подачи ближе?*\n_Например: дружелюбный, экспертный, дерзкий, живой..._"),
 }
 
 async def _onb_next(update: Update, user_id: int, state: dict) -> None:
@@ -182,15 +182,15 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
         else:
             # Нет доступа — предлагаем триал (тёплый тон, первый контакт)
             await send(update,
-                       f"✅ *Отлично, запомнила тебя!*\n\n"
-                       f"Теперь у меня есть твоя ниша и аудитория — буду работать точно под тебя.\n\n"
-                       f"Попробуй *{TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса, "
-                       f"и я покажу что умею. Без карты.",
+                       f"✅ *Отлично, запомнила!*\n\n"
+                       f"Знаю твою нишу и аудиторию — теперь работаю точно под тебя.\n\n"
+                       f"*Попробуй {TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса, "
+                       f"и я покажу, как работает твой личный AI-продюсер. Без карты.",
                        parse_mode="Markdown",
                        reply_markup=kb(
                            ["🎁 Активировать бесплатный доступ|sub_trial"],
                            ["💳 Сразу оформить подписку|sub_pay"],
-                           ["ℹ️ Что умеет бот?|sub_about"],
+                           ["ℹ️ Что умею?|sub_about"],
                        ))
 
 async def _handle_onboarding(update: Update, user_id: int, text: str, state: dict) -> bool:
@@ -823,8 +823,8 @@ async def _callback_inner(
             await grant_trial(user_id)
             await edit(query,
                        f"🎁 *{TRIAL_DAYS} дня бесплатного доступа активированы!*\n\n"
-                       "Теперь у тебя полный доступ ко всем инструментам.\n"
-                       "Напиши /menu чтобы начать 🚀",
+                       "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
+                       "Напиши тему поста или нажми меню 🚀",
                        parse_mode="Markdown",
                        reply_markup=kb(["☰ Главное меню|menu_main"]))
         except ValueError:
@@ -838,16 +838,18 @@ async def _callback_inner(
 
     elif data == "sub_about":
         await edit(query,
-                   "🎯 *Что умею:*\n\n"
-                   "📝 *Посты* — живые, без нейросетевого глянца\n"
-                   "🎬 *Рилсы* — хуки, заголовки, сценарии\n"
-                   "🎠 *Карусели* — структура + 20 вариантов заголовков\n"
-                   "📖 *Сторис* — цепочки слайдов с CTA\n"
-                   "🎙 *Разговорные видео* — сценарий монолога в кадре\n"
-                   "🔥 *Прогревы* — серии перед продажей\n"
-                   "📅 *Контент-план* — на 7-14 дней\n"
-                   "💡 *Быстрые идеи* — 10 тем за секунды\n\n"
-                   "Всё — под твою нишу и аудиторию, которые я уже знаю. "
+                   "🎯 *Твой AI-продюсер умеет:*\n\n"
+                   "✍️ *Написать пост* — живой текст в твоём стиле, не ChatGPT-глянец\n"
+                   "🎬 *Хуки для рилса* — заголовки, описания, сценарии\n"
+                   "🎠 *Карусель* — структура + 20 вариантов заголовков\n"
+                   "📸 *Сторис* — цепочки слайдов с CTA\n"
+                   "🎙 *Talking Head* — сценарий монолога в кадре\n"
+                   "🔥 *Прогрев* — серия перед продажей\n"
+                   "📅 *Контент-план TG* — на 7-14 дней\n"
+                   "💡 *Идеи для постов* — 10 тем за секунды\n\n"
+                   "Всё — под твою нишу и аудиторию, которые я уже знаю.\n\n"
+                   "SMM-щик стоит от $150/мес. Курс по контенту — $100 и устаревает. "
+                   f"Я работаю 24/7 за ${30} — и знаю твой голос.\n\n"
                    f"Попробуй *{TRIAL_DAYS} дня бесплатно* — без карты.",
                    parse_mode="Markdown",
                    reply_markup=kb(
@@ -1789,7 +1791,7 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     except Exception as e:
         logger.error(f"chat error: {e}")
         await send(update, "❌ Ошибка. Попробуй ещё раз.",
-                   reply_markup=kb(["🔁 Ещё раз|quick_ideas"]))
+                   reply_markup=kb(["🔁 Повторить|mode_chat", "← Меню|menu_main"]))
         return
     finally:
         _stop.set()
@@ -1797,7 +1799,18 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     await save_message(user_id, "user",      text,  model_key, "chat")
     await save_message(user_id, "assistant", reply, model_key, "chat")
-    await send(update, reply, reply_markup=kb(["🔁 Ещё раз|quick_ideas"]))
+
+    _is_refusal = any(marker in reply for marker in [
+        "# 🛑 Стоп", "не про маркетинг", "Я здесь, чтобы помочь с"
+    ])
+    if _is_refusal:
+        await send(update, reply, reply_markup=kb(
+            ["💡 Идеи для постов|quick_ideas", "← Меню|menu_main"]
+        ))
+    else:
+        await send(update, reply, reply_markup=kb(
+            ["💬 Ещё вопрос|mode_chat", "← Меню|menu_main"]
+        ))
 
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
