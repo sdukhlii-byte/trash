@@ -908,7 +908,6 @@ async def _callback_inner(
     # ── Поддержка ──
     if data == "support":
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
-        await query.answer()
         await update.effective_chat.send_message(
                    f"🆘 *Поддержка*\n\n"
                    f"Если возникли вопросы по работе бота или оплате — пиши напрямую.\n\n"
