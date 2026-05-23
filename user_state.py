@@ -20,9 +20,12 @@ user_state.py — машина состояний пользователя.
 
 from enum import Enum
 from datetime import datetime, timezone
+import logging
 
 from db import is_onboarded, get_profile
 from lava_payments import get_subscription, get_trial, has_used_trial
+
+logger = logging.getLogger(__name__)
 
 
 class UserState(Enum):
@@ -37,7 +40,16 @@ async def get_user_state(user_id: int) -> UserState:
     """
     Определяет текущее состояние пользователя.
     Единая точка правды — вызывается из всех точек входа.
+    При недоступной БД возвращает NEW (безопасный дефолт).
     """
+    try:
+        return await _get_user_state_inner(user_id)
+    except Exception as e:
+        logger.error(f"get_user_state error uid={user_id}: {e}", exc_info=True)
+        return UserState.NEW  # безопасный дефолт — покажет онбординг/paywall
+
+
+async def _get_user_state_inner(user_id: int) -> UserState:
     now = datetime.now(timezone.utc)
 
     # 1. Проверяем онбординг

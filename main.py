@@ -43,11 +43,15 @@ def main() -> None:
     async def post_init(application: Application) -> None:
         import agents as ag_module
         from telegram import BotCommand
+
+        # ── DB: критично — без пула бот нерабочий, лучше упасть и перезапуститься
         try:
             await init_db()
             logger.info("DB init OK")
         except Exception as e:
-            logger.error(f"DB init FAILED: {e}", exc_info=True)
+            logger.critical(f"DB init FAILED — бот не может работать без БД: {e}", exc_info=True)
+            raise  # Railway увидит ненулевой exit code и перезапустит
+
         try:
             await init_http()
             logger.info("HTTP client init OK")
