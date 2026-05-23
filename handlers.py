@@ -909,14 +909,13 @@ async def _callback_inner(
     if data == "support":
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
         await update.effective_chat.send_message(
-                   f"🆘 *Поддержка*\n\n"
+                   f"🆘 Поддержка\n\n"
                    f"Если возникли вопросы по работе бота или оплате — пиши напрямую.\n\n"
                    f"Менеджер: @{SUPPORT_USERNAME}",
-                   parse_mode="Markdown",
                    reply_markup=IKM([
                        [InlineKeyboardButton(f"💬 Написать @{SUPPORT_USERNAME}",
                                              url=f"https://t.me/{SUPPORT_USERNAME}")],
-                       [InlineKeyboardButton("☰ Меню", callback_data="menu_main")],
+                       [InlineKeyboardButton("Меню", callback_data="menu_main")],
                    ]))
         return
 
