@@ -25,6 +25,7 @@ from agents import get_spec, AgentSpec
 from config import (
     MODELS, DEFAULT_MODEL,
     CHAT_SYSTEM,
+    MIRA_INTRO,
     # Рилс-коротышка
     REELS_SHORT_TRIGGERS,
     build_reels_short_headline_system,
@@ -152,12 +153,13 @@ def carousel_trigger_kb() -> InlineKeyboardMarkup:
 # ── onboarding ────────────────────────────────────────────────────────────────
 _ONB_STEPS = ["niche", "audience", "tone"]
 _ONB_Q = {
-    "niche":    ("🎯 *Привет! Я твой AI-продюсер.*\n\n"
-                 "Пишу контент, строю стратегию, генерирую идеи — всё под твою нишу и голос.\n\n"
-                 "*С чем работаешь?*\n"
-                 "_Например: психология, фитнес, бьюти, бизнес, коучинг..._"),
-    "audience": ("*Кто твоя аудитория?*\n_Например: женщины 25-35, предприниматели, мамы в декрете..._"),
-    "tone":     ("*Какой стиль подачи ближе?*\n_Например: дружелюбный, экспертный, дерзкий, живой..._"),
+    "niche":    ("*С чем работаешь?*\n\n"
+                 "_Ниша, тема, экспертиза — в любом виде.\n"
+                 "Например: психология, фитнес, бьюти, бизнес, коучинг..._"),
+    "audience": ("*Кто твоя аудитория?*\n\n"
+                 "_Например: женщины 25-35, предприниматели, мамы в декрете..._"),
+    "tone":     ("*Какой стиль подачи ближе?*\n\n"
+                 "_Например: дружелюбный, экспертный, дерзкий, живой..._"),
 }
 
 async def _onb_next(update: Update, user_id: int, state: dict) -> None:
@@ -177,15 +179,15 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
         if has_access(new_state):
             # Уже есть подписка или триал (например вернулся старый юзер)
             await send(update,
-                       "✅ *Готово!* Профиль обновлён.\n\nЧто делаем?",
+                       "✅ Профиль обновлён.\n\nЧто делаем?",
                        parse_mode="Markdown", reply_markup=main_menu_kb())
         else:
             # Нет доступа — предлагаем триал (тёплый тон, первый контакт)
             await send(update,
-                       f"✅ *Отлично, запомнила!*\n\n"
-                       f"Знаю твою нишу и аудиторию — теперь работаю точно под тебя.\n\n"
-                       f"*Попробуй {TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса, "
-                       f"и я покажу, как работает твой личный AI-продюсер. Без карты.",
+                       f"✅ *Запомнила.*\n\n"
+                       f"Знаю твою нишу и аудиторию — теперь работаю точно под тебя, а не в общем.\n\n"
+                       f"Попробуй *{TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса "
+                       f"и увидишь разницу между шаблоном и контентом в твоём голосе. Без карты.",
                        parse_mode="Markdown",
                        reply_markup=kb(
                            ["🎁 Активировать бесплатный доступ|sub_trial"],
@@ -634,23 +636,23 @@ async def _show_paywall(update, user_id: int, state: UserState = None) -> None:
 
     if state == UserState.ONBOARDED:
         await send(update,
-                   f"👋 Привет!\n\n"
-                   f"Я помогаю блогерам и маркетологам делать контент *быстро и без боли* — "
-                   f"посты, рилсы, карусели, прогревы — прямо в Telegram.\n\n"
-                   f"Попробуй *{TRIAL_DAYS} дня бесплатно* — без карты, без обязательств. "
-                   f"Один инструмент — и сразу увидишь разницу.",
+                   f"Привет, я MIRA.\n\n"
+                   f"Веду закрытый клуб для экспертов — там мы разбираем контент, "
+                   f"который реально продаёт, а не просто набирает лайки.\n\n"
+                   f"Попробуй *{TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса "
+                   f"и увидишь разницу между шаблоном и контентом в твоём голосе. Без карты.",
                    parse_mode="Markdown",
                    reply_markup=kb(
                        ["🎁 Попробовать бесплатно|sub_trial"],
                        ["💳 Сразу оформить подписку|sub_pay"],
-                       ["👤 Подробнее о боте|sub_cabinet"],
+                       ["ℹ️ Что умею?|sub_about"],
                    ))
     elif state == UserState.EXPIRED:
         await send(update,
-                   "⏰ *Твой доступ закончился.*\n\n"
-                   "Все материалы которые ты создавала — сохранены и ждут.\n\n"
-                   "Возобнови подписку — и продолжай с того места где остановилась. "
-                   "€1 в день за весь инструментарий 💙",
+                   "⏰ *Доступ закончился.*\n\n"
+                   "Всё что ты создавала — сохранено и ждёт тебя.\n\n"
+                   "Возобнови подписку и продолжай с того места где остановилась. "
+                   "€1 в день за весь инструментарий клуба.",
                    parse_mode="Markdown",
                    reply_markup=kb(
                        ["🔄 Возобновить подписку|sub_pay"],
@@ -689,6 +691,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
+        await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
         return
 
@@ -703,7 +706,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             expires_str = f"\n\n⏳ _Пробный период: осталось {days_left} дн._"
         p = await get_profile(user_id)
         sent = await update.message.reply_text(
-            f"👋 Привет! Твой бесплатный период активен.{expires_str}\n\nЧто делаем?",
+            f"Снова здесь{expires_str}\n\nЧто делаем?",
             parse_mode="Markdown", reply_markup=main_menu_kb()
         )
         await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
@@ -716,12 +719,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         audience = profile_val(p, "audience")
         try:
             sent = await update.message.reply_text(
-                f"👋 Снова здесь!\n\nНиша: {niche}\nАудитория: {audience}\n\nЧто делаем?",
+                f"С возвращением.\n\nНиша: {niche} · Аудитория: {audience}\n\nЧто делаем?",
                 parse_mode="Markdown", reply_markup=main_menu_kb()
             )
         except Exception:
             sent = await update.message.reply_text(
-                f"👋 Снова здесь!\n\nЧто делаем?",
+                f"С возвращением.\n\nЧто делаем?",
                 reply_markup=main_menu_kb()
             )
         await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
@@ -752,14 +755,14 @@ async def _show_menu(update: Update, user_id: int) -> None:
             await update.effective_chat.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=int(stored_raw),
-                text="Выбери действие 👇",
+                text="Что делаем? 👇",
                 reply_markup=main_menu_kb(),
             )
             return
         except Exception:
             pass  # сообщение удалено или недоступно — создаём новое
     sent = await update.effective_chat.send_message(
-        "Выбери действие 👇", reply_markup=main_menu_kb()
+        "Что делаем? 👇", reply_markup=main_menu_kb()
     )
     await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
 
@@ -822,9 +825,9 @@ async def _callback_inner(
         try:
             await grant_trial(user_id)
             await edit(query,
-                       f"🎁 *{TRIAL_DAYS} дня бесплатного доступа активированы!*\n\n"
+                       f"🎁 *{TRIAL_DAYS} дня доступа активированы.*\n\n"
                        "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
-                       "Напиши тему поста или нажми меню 🚀",
+                       "Напиши тему поста или нажми меню 👇",
                        parse_mode="Markdown",
                        reply_markup=kb(["☰ Главное меню|menu_main"]))
         except ValueError:
@@ -938,7 +941,7 @@ async def _callback_inner(
         is_nav_msg = len(msg_text) < 300  # короткое служебное — редактируем на месте
 
         if is_nav_msg:
-            await edit(query, "Выбери действие 👇", reply_markup=main_menu_kb())
+            await edit(query, "Что делаем? 👇", reply_markup=main_menu_kb())
             await kv_set(user_id, "__menu_msg_id__", str(current_msg_id))
         else:
             # Результат генерации — не трогаем, показываем меню через _show_menu
@@ -946,7 +949,7 @@ async def _callback_inner(
 
     elif data == "mode_chat":
         await clear_all_agent_sessions(user_id)
-        await edit(query, "💬 *Режим чата*\n\nПиши — отвечу.",
+        await edit(query, "💬 *Спроси продюсера*\n\nПиши — отвечу.",
                    parse_mode="Markdown", reply_markup=kb(["← Меню|menu_main"]))
 
     # ── profile menu ──
@@ -1005,12 +1008,12 @@ async def _callback_inner(
         agent_key = await _detect_active_agent(user_id)
         spec      = get_spec(agent_key) if agent_key else None
         if not spec:
-            await send(update, "Нет активного агента. Выбери действие 👇",
+            await send(update, "Выбери инструмент 👇",
                        reply_markup=main_menu_kb())
             return
         s = await get_agent_session(user_id, agent_key)
         if not s:
-            await send(update, "Сессия истекла. Выбери действие 👇",
+            await send(update, "Сессия истекла — начни заново 👇",
                        reply_markup=main_menu_kb())
             return
         if spec.accept_photos:
@@ -1024,7 +1027,7 @@ async def _callback_inner(
         agent_key = await _detect_active_agent(user_id)
         spec      = get_spec(agent_key) if agent_key else None
         if not spec:
-            await send(update, "Нет активного агента. Выбери действие 👇",
+            await send(update, "Выбери инструмент 👇",
                        reply_markup=main_menu_kb())
             return
         await ag.force_generate(update, user_id, spec)
@@ -1033,7 +1036,7 @@ async def _callback_inner(
         agent_key = await _detect_active_agent(user_id)
         spec      = get_spec(agent_key) if agent_key else None
         if not spec:
-            await send(update, "Сессия истекла. Выбери действие 👇",
+            await send(update, "Сессия истекла — начни заново 👇",
                        reply_markup=main_menu_kb())
             return
         if spec.has_pick_step:
@@ -2010,7 +2013,7 @@ async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ── QUICK IDEAS: 10 идей без интервью ─────────────────────────────────────────
-_QI_KEY = "quick_ideas_flow"
+MIRA_MENU_PROMPT = "Что делаем? 👇"
 
 async def _qi_start(update: Update, user_id: int) -> None:
     await clear_agent_session(user_id, _QI_KEY)
