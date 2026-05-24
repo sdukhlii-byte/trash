@@ -2054,6 +2054,7 @@ async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ── QUICK IDEAS: 10 идей без интервью ─────────────────────────────────────────
 MIRA_MENU_PROMPT = "Что делаем? 👇"
+_QI_KEY = "quick_ideas_flow"
 
 async def _qi_start(update: Update, user_id: int) -> None:
     await clear_agent_session(user_id, _QI_KEY)
