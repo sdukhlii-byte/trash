@@ -241,10 +241,12 @@ _RS_KEY = "reels_short_flow"
 async def _rs_start(update: Update, user_id: int) -> None:
     await clear_agent_session(user_id, _RS_KEY)
     await save_agent_session(user_id, _RS_KEY, {"step": "await_topic"})
-    await send(update,
-               "🎬 *Рилс-коротышка*\n\nНапиши тему рилса:\n\n"
-               "_Например: делегирование / выгорание / как поднять цену_",
-               parse_mode="Markdown", reply_markup=kb(["← Меню|menu_main"]))
+    _rs_caption = ("🎬 *Хуки для рилса*\n\nНапиши тему рилса:\n\n"
+                   "_Например: делегирование / выгорание / как поднять цену_")
+    if not await _send_photo(update, "posti5.png", _rs_caption,
+                             kb(["← Меню|menu_main"]), "Markdown"):
+        await send(update, _rs_caption, parse_mode="Markdown",
+                   reply_markup=kb(["← Меню|menu_main"]))
 
 async def _rs_gen_headlines(update: Update, user_id: int, topic: str) -> None:
     profile = await get_profile(user_id)
@@ -663,27 +665,30 @@ async def _show_paywall(update, user_id: int, state: UserState = None) -> None:
         state = await get_user_state(user_id)
 
     if state == UserState.ONBOARDED:
-        await send(update,
-                   f"Ало.\n\n"
-                   f"Я про контент который продаёт — посты, рилсы, прогревы, сторис. "
-                   f"Всё в твоём голосе, под твою аудиторию.\n\n"
-                   f"*{TRIAL_DAYS} дня бесплатно* — без карты. Попробуй одну задачу и поймёшь.",
-                   parse_mode="Markdown",
-                   reply_markup=kb(
-                       ["🎁 Попробовать бесплатно|sub_trial"],
-                       ["💳 Сразу оформить подписку|sub_pay"],
-                       ["ℹ️ Что умею?|sub_about"],
-                   ))
+        _onb_caption = (
+            f"Привет, я Мира.\n\n"
+            f"Посты, рилсы, прогревы, сторис — в твоём голосе, под твою аудиторию.\n\n"
+            f"*{TRIAL_DAYS} дня бесплатно* — без карты. Попробуй одну задачу и поймёшь."
+        )
+        _onb_kb = kb(
+            ["🎁 Попробовать бесплатно|sub_trial"],
+            ["💳 Сразу оформить подписку|sub_pay"],
+            ["ℹ️ Что умею?|sub_about"],
+        )
+        if not await _send_photo(update, "posti4.png", _onb_caption, _onb_kb, "Markdown"):
+            await send(update, _onb_caption, parse_mode="Markdown", reply_markup=_onb_kb)
     elif state == UserState.EXPIRED:
-        await send(update,
-                   "Доступ закончился.\n\n"
-                   "Всё что создавала — никуда не делось, ждёт тебя.\n\n"
-                   "€1 в день. Меньше кофе который ты всё равно не допиваешь.",
-                   parse_mode="Markdown",
-                   reply_markup=kb(
-                       ["🔄 Возобновить подписку|sub_pay"],
-                       ["👤 Личный кабинет|sub_cabinet"],
-                   ))
+        _exp_caption = (
+            "Доступ закончился.\n\n"
+            "Всё что создавала — никуда не делось, ждёт тебя.\n\n"
+            "€1 в день. Меньше кофе который ты всё равно не допиваешь."
+        )
+        _exp_kb = kb(
+            ["🔄 Возобновить подписку|sub_pay"],
+            ["👤 Личный кабинет|sub_cabinet"],
+        )
+        if not await _send_photo(update, "posti9.png", _exp_caption, _exp_kb):
+            await send(update, _exp_caption, reply_markup=_exp_kb)
     else:
         await send(update,
                    "🔒 Доступ по подписке.\n\nОформи — и начнём работать.",
@@ -848,12 +853,16 @@ async def _callback_inner(
     elif data == "sub_trial":
         try:
             await grant_trial(user_id)
-            await edit(query,
-                       f"🎁 *{TRIAL_DAYS} дня доступа активированы.*\n\n"
-                       "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
-                       "Напиши тему поста или нажми меню 👇",
-                       parse_mode="Markdown",
-                       reply_markup=kb(["☰ Главное меню|menu_main"]))
+            _trial_caption = (
+                f"🎁 *{TRIAL_DAYS} дня доступа активированы.*\n\n"
+                "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
+                "Напиши тему поста или нажми меню 👇"
+            )
+            await query.message.delete()
+            if not await _send_photo(update, "posti10.png", _trial_caption,
+                                     kb(["☰ Главное меню|menu_main"]), "Markdown"):
+                await send(update, _trial_caption, parse_mode="Markdown",
+                           reply_markup=kb(["☰ Главное меню|menu_main"]))
         except ValueError:
             await edit(query,
                        "❌ Пробный период уже был использован.\n\n"
@@ -976,8 +985,12 @@ async def _callback_inner(
 
     elif data == "mode_chat":
         await clear_all_agent_sessions(user_id)
-        await edit(query, "💬 *Спроси продюсера*\n\nПиши — отвечу.",
-                   parse_mode="Markdown", reply_markup=kb(["← Меню|menu_main"]))
+        _chat_caption = "💬 *Спроси продюсера*\n\nПиши — отвечу."
+        await query.message.delete()
+        if not await _send_photo(update, "posti7.png", _chat_caption,
+                                 kb(["← Меню|menu_main"]), "Markdown"):
+            await send(update, _chat_caption, parse_mode="Markdown",
+                       reply_markup=kb(["← Меню|menu_main"]))
 
     # ── profile menu ──
     elif data == "menu_profile":
@@ -2048,13 +2061,14 @@ async def _qi_start(update: Update, user_id: int) -> None:
     profile = await get_profile(user_id)
     niche = profile.get("niche", "")
     if niche:
-        # Сразу генерируем по профилю без лишних вопросов
         await _qi_generate(update, user_id, niche)
     else:
-        await send(update,
-                   "💡 *10 идей быстро*\n\nДля какой ниши генерировать идеи?\n"
-                   "_Можешь написать любую тему_",
-                   parse_mode="Markdown", reply_markup=kb(["← Меню|menu_main"]))
+        _qi_caption = ("🧠 *Мозговой штурм*\n\nДля какой ниши генерировать идеи?\n"
+                       "_Можешь написать любую тему_")
+        if not await _send_photo(update, "posti8.png", _qi_caption,
+                                 kb(["← Меню|menu_main"]), "Markdown"):
+            await send(update, _qi_caption, parse_mode="Markdown",
+                       reply_markup=kb(["← Меню|menu_main"]))
 
 async def _qi_generate(update: Update, user_id: int, niche: str) -> None:
     profile = await get_profile(user_id)
@@ -2327,20 +2341,20 @@ async def _daily_menu(update: Update, user_id: int) -> None:
     from db import get_daily_settings
     settings = await get_daily_settings(user_id)
     status_icon = "✅" if settings.get("enabled") else "❌"
-    # Показываем локальное время если сохранено, иначе UTC
     hour_display   = settings.get("hour_local", settings.get("hour", 9))
     minute_display = settings.get("minute", 0)
-    text = (f"☀️ *Дейли-режим*\n\n"
+    text = (f"☀️ *Утренний брифинг*\n\n"
             f"Статус: {status_icon} {'Включён' if settings.get('enabled') else 'Выключен'}\n"
             f"Время: {hour_display:02d}:{minute_display:02d}\n\n"
             "_Каждое утро получай идею дня + формат + задачу на сегодня_")
     toggle_label = "❌ Выключить|daily_off" if settings.get("enabled") else "✅ Включить|daily_on"
-    await send(update, text, parse_mode="Markdown",
-               reply_markup=kb(
-                   [toggle_label],
-                   ["⏰ Изменить время|daily_set_time"],
-                   ["← Меню|menu_main"],
-               ))
+    _daily_kb = kb(
+        [toggle_label],
+        ["⏰ Изменить время|daily_set_time"],
+        ["← Меню|menu_main"],
+    )
+    if not await _send_photo(update, "posti4.png", text, _daily_kb, "Markdown"):
+        await send(update, text, parse_mode="Markdown", reply_markup=_daily_kb)
 
 async def _daily_send_now(ctx, user_id: int, bot) -> None:
     """Отправляет утреннее сообщение пользователю."""
