@@ -858,7 +858,6 @@ async def _callback_inner(
                 "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
                 "Напиши тему поста или нажми меню 👇"
             )
-            await query.message.delete()
             if not await _send_photo(update, "posti10.png", _trial_caption,
                                      kb(["☰ Главное меню|menu_main"]), "Markdown"):
                 await send(update, _trial_caption, parse_mode="Markdown",
@@ -892,7 +891,6 @@ async def _callback_inner(
             ["🎁 Активировать бесплатный доступ|sub_trial"],
             ["💳 Оформить подписку|sub_pay"],
         )
-        await query.message.delete()
         if not await _send_photo(update, "posti2.png", _about_text, _about_kb, "Markdown"):
             await send(update, _about_text, parse_mode="Markdown", reply_markup=_about_kb)
         return
@@ -986,10 +984,9 @@ async def _callback_inner(
     elif data == "mode_chat":
         await clear_all_agent_sessions(user_id)
         _chat_caption = "💬 *Спроси продюсера*\n\nПиши — отвечу."
-        await query.message.delete()
         if not await _send_photo(update, "posti7.png", _chat_caption,
                                  kb(["← Меню|menu_main"]), "Markdown"):
-            await send(update, _chat_caption, parse_mode="Markdown",
+            await edit(query, _chat_caption, parse_mode="Markdown",
                        reply_markup=kb(["← Меню|menu_main"]))
 
     # ── profile menu ──
