@@ -180,13 +180,21 @@ def carousel_trigger_kb() -> InlineKeyboardMarkup:
 # ── onboarding ────────────────────────────────────────────────────────────────
 _ONB_STEPS = ["niche", "audience", "tone"]
 _ONB_Q = {
-    "niche":    ("*С чем работаешь?*\n\n"
-                 "_Ниша, тема, экспертиза — как есть.\n"
-                 "Фитнес, бьюти, психология, бизнес, коучинг — или что-то своё_"),
-    "audience": ("*Кто твоя аудитория?*\n\n"
-                 "_Конкретно. Не «все женщины» — а кто реально покупает._"),
-    "tone":     ("*Как говоришь со своей аудиторией?*\n\n"
-                 "_Дерзко, экспертно, дружелюбно, с юмором — или всё вместе?_"),
+    "niche": (
+        "С чем работаешь?\n\n"
+        "_Ниша, тема, экспертиза — как есть. "
+        "Фитнес, психология, бизнес, дизайн — или что-то своё._"
+    ),
+    "audience": (
+        "Кто твои люди?\n\n"
+        "_Опиши одного конкретного человека который читает тебя или уже покупает. "
+        "Не «женщины 25-45» — а кто он, что его беспокоит, чего хочет._"
+    ),
+    "tone": (
+        "Как ты с ними разговариваешь?\n\n"
+        "_Дерзко и прямо, тепло и поддерживающе, экспертно и по делу — или что-то своё? "
+        "Можно скинуть пример поста если проще показать._"
+    ),
 }
 
 async def _onb_next(update: Update, user_id: int, state: dict) -> None:
@@ -264,7 +272,25 @@ async def _handle_onboarding(update: Update, user_id: int, text: str, state: dic
     state["data"] = data
     state["step"] = idx + 1
     await save_onboarding_state(user_id, state)
+
+    # Acknowledgement between steps — user feels heard, not form-filling
+    ack = ""
+    if idx == 0:
+        # After niche answer — show we understand their context
+        niche = text.strip()
+        ack = (
+            f"Поняла — {niche[:60]}.\n\n"
+            f"Теперь важный момент 👇"
+        )
+    elif idx == 1:
+        # After audience answer — show we're thinking about their specific people
+        ack = "Хорошо, вижу с кем работаешь.\n\nПоследнее:"
+
+    if ack:
+        await send(update, ack)
+
     await _onb_next(update, user_id, state)
+    return True
     return True
 
 
