@@ -998,6 +998,7 @@ async def _callback_inner(
 
     elif data == "mode_chat":
         await clear_all_agent_sessions(user_id)
+        await clear_onboarding_state(user_id)
         _chat_caption = "💬 *Спроси продюсера*\n\nПиши — отвечу."
         if not await _send_photo(update, "posti7.png", _chat_caption,
                                  kb(["← Меню|menu_main"]), "Markdown"):
@@ -1053,6 +1054,7 @@ async def _callback_inner(
             await edit(query, "Агент не найден.")
             return
         await clear_all_agent_sessions(user_id)
+        await clear_onboarding_state(user_id)  # сбрасываем незавершённый онбординг
         await ag.start(update, user_id, spec)
 
     # ── generic agent actions ──
@@ -1123,6 +1125,7 @@ async def _callback_inner(
     # ── Рилс-коротышка ──
     elif data == "flow_reels_short":
         await clear_all_agent_sessions(user_id)
+        await clear_onboarding_state(user_id)
         await _rs_start(update, user_id)
 
     elif data == "rs_regen":
@@ -1160,6 +1163,7 @@ async def _callback_inner(
     # ── Каруселькин ──
     elif data == "flow_carousel":
         await clear_all_agent_sessions(user_id)
+        await clear_onboarding_state(user_id)
         await _car_start(update, user_id)
 
     elif data == "car_headlines":
@@ -1596,7 +1600,15 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # 1. Онбординг
     onb = await get_onboarding_state(user_id)
     if onb:
-        if await _handle_onboarding(update, user_id, text, onb): return
+        # Глобальная защита: если у юзера есть активная агент-сессия —
+        # онбординг был открыт случайно (напр. через "Изменить профиль").
+        # Сбрасываем онбординг чтобы ответы не перезаписали профиль.
+        active_agent = await _detect_active_agent(user_id)
+        if active_agent:
+            await clear_onboarding_state(user_id)
+            onb = None
+        else:
+            if await _handle_onboarding(update, user_id, text, onb): return
 
     if not await is_onboarded(user_id):
         # Проверяем — может профиль уже есть (после рестарта сервера)
