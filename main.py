@@ -12,7 +12,7 @@ from telegram.ext import (
 
 from lava_payments import setup_lava_webhook
 
-from config import TELEGRAM_TOKEN, LLM_SEMAPHORE_SIZE, WEBHOOK_URL, PORT
+from config import TELEGRAM_TOKEN, LLM_SEMAPHORE_FAST, LLM_SEMAPHORE_HEAVY, WEBHOOK_URL, PORT
 from db import init_db, close_db
 from handlers import (
     cmd_start, cmd_menu, cmd_clear, cmd_reset, cmd_subscribe, cmd_support,
@@ -63,8 +63,8 @@ def main() -> None:
         except Exception as e:
             logger.error(f"HTTP init FAILED: {e}", exc_info=True)
 
-        init_semaphore(LLM_SEMAPHORE_SIZE)
-        logger.info(f"LLM semaphore ready (size={LLM_SEMAPHORE_SIZE})")
+        init_semaphore(LLM_SEMAPHORE_FAST, LLM_SEMAPHORE_HEAVY)
+        logger.info(f"LLM semaphores ready (fast={LLM_SEMAPHORE_FAST}, heavy={LLM_SEMAPHORE_HEAVY})")
         logger.info(f"Agents registered: {[s.key for s in ag_module.all_specs()]}")
 
         # Регистрируем команды — появятся в меню "/" в Telegram

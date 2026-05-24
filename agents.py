@@ -31,7 +31,10 @@ _AGENT_PROMPT_SLUGS: dict[str, tuple[str, str]] = {
 
 logger = logging.getLogger(__name__)
 
-_DONE_SIGNAL = "генерирую"
+# FIX: "генерирую" is too common in Russian speech and false-triggered the interview end.
+# Now interviewers append the hidden marker [READY] to their final message.
+# The code detects it, strips it before showing to user, and triggers generation.
+_DONE_SIGNAL = "[ready]"
 
 
 @dataclass
@@ -86,6 +89,9 @@ async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
         "initial": "", "history": [], "q_count": 0,
         "picked": "", "extra": {}, "photos": [],
     })
+    # FIX: store explicit active agent key to avoid expensive Redis SCAN
+    from db import kv_set as _kv_set
+    await _kv_set(user_id, "__active_agent__", spec.key)
     _kb = kb(["← Меню|menu_main"])
     if spec.photo:
         _dirs = [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]
@@ -167,7 +173,7 @@ async def handle_photo(update: Update, user_id: int, spec: AgentSpec) -> None:
         ih = session.get("history", [])
         caption_text = caption if caption else "Смотри на скриншот — учти его в следующем вопросе."
         interviewer = await _resolve_interviewer_custom(user_id, spec)
-        status = await update.effective_chat.send_message("🔍 Смотрю на скриншот...")
+        status = await update.effective_chat.send_message("Смотрю что тут...")
         try:
             reply = await llm.vision_chat(
                 history=ih,
@@ -195,8 +201,9 @@ async def handle_photo(update: Update, user_id: int, spec: AgentSpec) -> None:
         session["step"]     = "interview"
         await save_agent_session(user_id, spec.key, session)
 
+        clean_reply = reply.replace("[READY]", "").replace("[ready]", "").strip()
         if _DONE_SIGNAL in reply.lower() or session["q_count"] >= spec.max_q:
-            await send(update, reply, parse_mode="Markdown")
+            await send(update, clean_reply, parse_mode="Markdown")
             if spec.accept_photos:
                 await _offer_photos(update, user_id, spec, session)
             elif spec.has_pick_step:
@@ -204,7 +211,8 @@ async def handle_photo(update: Update, user_id: int, spec: AgentSpec) -> None:
             else:
                 await generate(update, user_id, spec, session)
         else:
-            await send(update, reply, parse_mode="Markdown",
+            q_info = f"\n\n_Вопрос {session['q_count']} из {spec.max_q}_"
+            await send(update, clean_reply + q_info, parse_mode="Markdown",
                        reply_markup=kb(["⏭ Достаточно|agent_skip", "← Меню|menu_main"]))
         return
 
@@ -230,7 +238,7 @@ async def _first_message(update: Update, user_id: int,
     ctx     = _build_context(spec, profile, style_examples)
     interviewer = await _resolve_interviewer_custom(user_id, spec)
 
-    status = await update.effective_chat.send_message("💭 Думаю над первым вопросом...")
+    status = await update.effective_chat.send_message("Записала — думаю...")
     try:
         first_q = await llm.complete(
             interviewer,
@@ -240,7 +248,7 @@ async def _first_message(update: Update, user_id: int,
         logger.error(f"[{spec.key}] first_message LLM error: {e}")
         try: await status.delete()
         except: pass
-        await send(update, "❌ Ошибка связи. Попробуй снова.",
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
                    reply_markup=kb(["🔁 Попробовать снова|agent_restart_" + spec.key,
                                     "← Меню|menu_main"]))
         return
@@ -256,20 +264,23 @@ async def _first_message(update: Update, user_id: int,
         "step":    "interview",
     })
     await save_agent_session(user_id, spec.key, session)
-    await send(update, first_q, parse_mode="Markdown", reply_markup=kb(["⏭ Пропустить вопросы|agent_skip", "← Меню|menu_main"]))
+    clean_q = first_q.replace("[READY]", "").replace("[ready]", "").strip()
+    q_info = f"\n\n_Вопрос 1 из {spec.max_q}_"
+    await send(update, clean_q + q_info, parse_mode="Markdown",
+               reply_markup=kb(["⏭ Пропустить вопросы|agent_skip", "← Меню|menu_main"]))
 
 
 async def _interview_step(update: Update, user_id: int,
                            spec: AgentSpec, text: str, session: dict) -> None:
     ih = session["history"]
-    ih.append({"role": "user", "content": text})
+    ih.append({"role": "user", "content": text[:1500]})  # cap to prevent context overflow
     interviewer = await _resolve_interviewer_custom(user_id, spec)
     try:
         next_msg = await llm.chat(ih, system=interviewer)
     except Exception as e:
         logger.error(f"[{spec.key}] interview LLM error: {e}")
         ih.pop()  # откатываем незасохранённое сообщение
-        await send(update, "❌ Ошибка связи. Попробуй ответить ещё раз.",
+        await send(update, "Связь прервалась — ответь ещё раз 🔁",
                    reply_markup=kb(["⏭ Пропустить вопросы|agent_skip", "← Меню|menu_main"]))
         return
 
@@ -278,8 +289,9 @@ async def _interview_step(update: Update, user_id: int,
     session["q_count"] = session.get("q_count", 0) + 1
     await save_agent_session(user_id, spec.key, session)
 
+    clean_msg = next_msg.replace("[READY]", "").replace("[ready]", "").strip()
     if _DONE_SIGNAL in next_msg.lower() or session["q_count"] >= spec.max_q:
-        await send(update, next_msg, parse_mode="Markdown")
+        await send(update, clean_msg, parse_mode="Markdown")
         if spec.accept_photos:
             await _offer_photos(update, user_id, spec, session)
         elif spec.has_pick_step:
@@ -287,7 +299,8 @@ async def _interview_step(update: Update, user_id: int,
         else:
             await generate(update, user_id, spec, session)
     else:
-        await send(update, next_msg, parse_mode="Markdown",
+        q_info = f"\n\n_Вопрос {session['q_count']} из {spec.max_q}_"
+        await send(update, clean_msg + q_info, parse_mode="Markdown",
                    reply_markup=kb(["⏭ Достаточно|agent_skip", "← Меню|menu_main"]))
 
 
@@ -311,7 +324,7 @@ async def _gen_variants(update: Update, user_id: int,
     session["step"] = "generating"
     await save_agent_session(user_id, spec.key, session)
 
-    status = await update.effective_chat.send_message("⏳ Генерирую варианты...")
+    status = await update.effective_chat.send_message("Составляю варианты для тебя...")
     try:
         profile    = await get_profile(user_id)
         sys_prompt = await _resolve_generator_custom(user_id, spec, session, profile)
@@ -326,7 +339,7 @@ async def _gen_variants(update: Update, user_id: int,
         except: pass
         session["step"] = "interview"
         await save_agent_session(user_id, spec.key, session)
-        await send(update, "❌ Ошибка генерации. Попробуй снова.",
+        await send(update, "Не вышло с первого раза — жми ещё раз 🔁",
                    reply_markup=kb(["🔁 Повторить|agent_regen", "← Меню|menu_main"]))
         return
     try: await status.delete()
@@ -399,12 +412,13 @@ async def generate(update: Update, user_id: int,
     """Финальная генерация (одношаговые агенты + profile с фото)."""
     session["step"] = "generating"
     await save_agent_session(user_id, spec.key, session)
-    status = await update.effective_chat.send_message("⏳ Генерирую...")
+    status = await update.effective_chat.send_message("Пишу...")
 
     profile    = await get_profile(user_id)
     style_examples = await get_style_examples(user_id)
+    # FIX: use latest 3 examples, not oldest 3
     if style_examples and not callable(spec.generator):
-        examples_text = "\n---\n".join(style_examples[:3])
+        examples_text = "\n---\n".join(style_examples[-3:])
         sys_prompt = (await _resolve_generator_custom(user_id, spec, session, profile)) + f"\n\nПРИМЕРЫ СТИЛЯ АВТОРА (пиши в этом стиле):\n{examples_text}"
     else:
         sys_prompt = await _resolve_generator_custom(user_id, spec, session, profile)
@@ -425,8 +439,7 @@ async def generate(update: Update, user_id: int,
         logger.error(f"[{spec.key}] generate error: {e}")
         try: await status.delete()
         except: pass
-        # Не чистим сессию — пусть user сможет нажать retry
-        await send(update, "❌ Ошибка генерации. Попробуй снова.",
+        await send(update, "Не вышло с первого раза — жми ещё раз 🔁",
                    reply_markup=kb(["🔁 Повторить|agent_retry", "← Меню|menu_main"]))
         return
 
@@ -474,7 +487,7 @@ def _build_context(spec: AgentSpec, profile: dict, style_examples: list = None) 
     if profile.get("audience"): parts.append(f"Аудитория: {profile['audience']}")
     if profile.get("tone"):     parts.append(f"Тон голоса: {profile['tone']}")
     if style_examples:
-        examples_text = "\n---\n".join(style_examples[:3])
+        examples_text = "\n---\n".join(style_examples[-3:])  # FIX: use latest 3, not oldest
         parts.append(f"\nПРИМЕРЫ СТИЛЯ АВТОРА (пиши в этом стиле):\n{examples_text}")
     return "\n".join(parts)
 

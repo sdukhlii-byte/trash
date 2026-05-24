@@ -198,20 +198,52 @@ async def _onb_next(update: Update, user_id: int, state: dict) -> None:
         await save_profile(user_id, profile)
         await clear_onboarding_state(user_id)
 
-        # ── После онбординга — проверяем доступ через машину состояний ──────
-        # Нельзя сразу показывать меню — это обход paywall!
+        # ── После онбординга — WOW-МОМЕНТ перед пейволлом ──────────────────
         from user_state import get_user_state, has_access, UserState
         new_state = await get_user_state(user_id)
 
         if has_access(new_state):
-            # Уже есть подписка или триал (например вернулся старый юзер)
             await send(update,
                        "✅ Профиль обновлён.\n\nЧто делаем?",
                        parse_mode="Markdown", reply_markup=main_menu_kb())
         else:
-            # Нет доступа — предлагаем триал (тёплый тон, первый контакт)
+            # Генерируем ОДНУ вещь бесплатно — пусть попробует продукт до пейволла
+            _data = state.get("data", {})
+            _niche    = _data.get("niche", "")
+            _audience = _data.get("audience", "")
+            _tone     = _data.get("tone", "")
+            _preview_result = None
+            if _niche:
+                try:
+                    _preview_status = await update.effective_chat.send_message(
+                        "Записала всё — дай одну секунду, кое-что покажу 👇"
+                    )
+                    _preview_prompt = (
+                        f"Ниша: {_niche}\n"
+                        f"Аудитория: {_audience}\n"
+                        f"Тон: {_tone}\n\n"
+                        f"Дай ровно 3 конкретные идеи для постов — по одной строке каждая, "
+                        f"с номером. Только список, без вступлений."
+                    )
+                    _preview_result = await complete(
+                        _protect(user_id, QUICK_IDEAS_SYSTEM), _preview_prompt
+                    )
+                    try: await _preview_status.delete()
+                    except: pass
+                except Exception as _e:
+                    logger.warning(f"onboarding preview failed: {_e}")
+                    try: await _preview_status.delete()
+                    except: pass
+
             _caption = (
-                f"*Запомнила.*\n\n"
+                f"*Записала.*\n\n"
+                f"Вот три идеи для постов под твою нишу:\n\n"
+                f"{_preview_result}\n\n"
+                f"――――――――――――――\n"
+                f"Это только начало. *{TRIAL_DAYS} дня бесплатно* — "
+                f"рилсы, карусели, прогревы, полные посты. Без карты."
+            ) if _preview_result else (
+                f"*Записала.*\n\n"
                 f"Знаю нишу, знаю аудиторию — теперь пишу под тебя, а не в общем.\n\n"
                 f"*{TRIAL_DAYS} дня бесплатно* — напиши тему поста или рилса "
                 f"и сама увидишь разницу. Без карты, без подвоха."
@@ -244,7 +276,7 @@ async def _rs_start(update: Update, user_id: int) -> None:
     await save_agent_session(user_id, _RS_KEY, {"step": "await_topic"})
     _rs_caption = ("🎬 *Хуки для рилса*\n\nНапиши тему рилса:\n\n"
                    "_Например: делегирование / выгорание / как поднять цену_")
-    if not await _send_photo(update, "2huki.png", _rs_caption,
+    if not await _send_photo(update, "posti5.png", _rs_caption,
                              kb(["← Меню|menu_main"]), "Markdown"):
         await send(update, _rs_caption, parse_mode="Markdown",
                    reply_markup=kb(["← Меню|menu_main"]))
@@ -257,7 +289,7 @@ async def _rs_gen_headlines(update: Update, user_id: int, topic: str) -> None:
         profile.get("tone", "живой"),
     )
     system  = _protect(user_id, await get_prompt(user_id, "reels_short_headlines", _base_rsh))
-    status = await update.effective_chat.send_message("✍️ Генерирую 14 заголовков...")
+    status = await update.effective_chat.send_message("Пишу заголовки...")
     try:
         headlines = await complete(system, f"Тема: {topic}")
     except Exception as e:
@@ -329,14 +361,14 @@ async def _rs_generate(update: Update, user_id: int, s: dict) -> None:
               f"Заголовок: {s.get('chosen','')}\n"
               f"Детали: {s.get('details','нет')}\n"
               f"CTA / куда ведёт: {s.get('destination','подписаться')}")
-    status = await update.effective_chat.send_message("🎬 Генерирую описание...")
+    status = await update.effective_chat.send_message("Пишу описание...")
     try:
         result = await complete(system, prompt)
     except Exception as e:
         logger.error(f"_rs_generate error: {e}")
         try: await status.delete()
         except: pass
-        await send(update, "❌ Ошибка генерации. Попробуй ещё раз.",
+        await send(update, "Не вышло с первого раза — жми ещё раз 🔁",
                    reply_markup=kb(["🔁 Повторить|rs_retry_gen", "← Меню|menu_main"]))
         return
     try: await status.delete()
@@ -397,7 +429,7 @@ async def _car_check_trend(update: Update, user_id: int, topic: str, s: dict) ->
     profile = await get_profile(user_id)
     prompt  = (f"Ниша: {profile.get('niche','не указана')}\n"
                f"Аудитория: {profile.get('audience','не указана')}\nТема: {topic}")
-    status = await update.effective_chat.send_message("🔍 Проверяю тему...")
+    status = await update.effective_chat.send_message("Смотрю на тему...")
     _trend_sys = _protect(user_id, await get_prompt(user_id, "carousel_trend", CAROUSEL_TREND_SYSTEM))
     try:    trend = await complete(_trend_sys, prompt)
     except: trend = "Не удалось проверить. Продолжаем."
@@ -414,7 +446,7 @@ async def _car_gen_headlines(update: Update, user_id: int, s: dict) -> None:
     profile = await get_profile(user_id)
     prompt  = (f"Ниша: {profile.get('niche','')}\n"
                f"Аудитория: {profile.get('audience','')}\nТема: {s['topic']}")
-    status = await update.effective_chat.send_message("✍️ Генерирую 20 заголовков...")
+    status = await update.effective_chat.send_message("Собираю 20 заголовков...")
     try:
         _hl_sys = _protect(user_id, await get_prompt(user_id, "carousel_headlines", CAROUSEL_HEADLINE_SYSTEM))
         headlines = await complete(_hl_sys, prompt)
@@ -422,7 +454,7 @@ async def _car_gen_headlines(update: Update, user_id: int, s: dict) -> None:
         logger.error(f"_car_gen_headlines error: {e}")
         try: await status.delete()
         except: pass
-        await send(update, "❌ Ошибка генерации заголовков. Попробуй снова.",
+        await send(update, "Не вышло с первого раза — нажми ещё раз 🔁",
                    reply_markup=kb(["🔁 Повторить|car_headlines", "← Меню|menu_main"]))
         return
     try: await status.delete()
@@ -479,7 +511,7 @@ async def _car_trigger_chosen(update: Update, user_id: int, trigger: str, s: dic
                  f"Формат: {fn}\nТриггер: {tn}\n"
                  f"Ниша: {profile.get('niche','')}\nАудитория: {profile.get('audience','')}")
 
-    status = await update.effective_chat.send_message("🎙 Готовлю первый вопрос...")
+    status = await update.effective_chat.send_message("Думаю с чего начать...")
     try:
         _car_int = _protect(user_id, await get_prompt(user_id, "carousel_interviewer", CAROUSEL_INTERVIEWER))
         first_q = await complete(_car_int,
@@ -488,7 +520,7 @@ async def _car_trigger_chosen(update: Update, user_id: int, trigger: str, s: dic
         logger.error(f"carousel first question failed: {e}")
         try: await status.delete()
         except: pass
-        await send(update, "❌ Ошибка. Попробуй ещё раз.",
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
                    reply_markup=kb(["🔁 Выбрать триггер снова|car_fmt_back_to_trigger",
                                     "← Меню|menu_main"]))
         return
@@ -499,8 +531,9 @@ async def _car_trigger_chosen(update: Update, user_id: int, trigger: str, s: dic
     s.update({"trigger": trigger, "step": "interview",
               "interview_history": ih, "q_count": 1})
     await save_agent_session(user_id, _CAR_KEY, s)
+    clean_first_q = first_q.replace("[READY]", "").replace("[ready]", "").strip()
     await send(update,
-               f"🎙 *Сбор внутрянки*\n_{tn}_ · _{fn}_\n\n{first_q}",
+               f"🎙 *Сбор внутрянки*\n_{tn}_ · _{fn}_\n\n{clean_first_q}\n\n_Вопрос 1 из 5_",
                parse_mode="Markdown",
                reply_markup=kb(["⏭ Пропустить, генерируй|car_generate",
                                  "← Меню|menu_main"]))
@@ -513,7 +546,7 @@ async def _car_interview_step(update: Update, user_id: int, text: str, s: dict) 
         next_msg = await chat(ih, system=_car_int2)
     except Exception as e:
         logger.error(f"carousel interview LLM error: {e}")
-        await send(update, "❌ Ошибка связи. Попробуй ответить ещё раз.",
+        await send(update, "Связь прервалась — ответь ещё раз 🔁",
                    reply_markup=kb(["⏭ Пропустить, генерируй|car_generate",
                                     "← Меню|menu_main"]))
         return
@@ -522,11 +555,12 @@ async def _car_interview_step(update: Update, user_id: int, text: str, s: dict) 
     s["interview_history"] = ih
     s["q_count"] = s.get("q_count", 0) + 1
     await save_agent_session(user_id, _CAR_KEY, s)
-    if "генерирую карусель" in next_msg.lower() or s["q_count"] >= 5:
-        await send(update, next_msg, parse_mode="Markdown")
+    clean_msg = next_msg.replace("[READY]", "").replace("[ready]", "").strip()
+    if "[ready]" in next_msg.lower() or s["q_count"] >= 5:
+        await send(update, clean_msg, parse_mode="Markdown")
         await _car_generate(update, user_id, s)
     else:
-        await send(update, next_msg, parse_mode="Markdown",
+        await send(update, clean_msg, parse_mode="Markdown",
                    reply_markup=kb(["⏭ Достаточно, генерируй|car_generate",
                                     "← Меню|menu_main"]))
 
@@ -559,7 +593,7 @@ async def _car_generate(update: Update, user_id: int, s: dict) -> None:
     # only clear on success, so the "🔁 Новая карусель" button still works and on error
     # the "car_generate" button can retry with the same accumulated data.
     if not result:
-        await send(update, "❌ Ошибка. Попробуй снова.",
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
                    reply_markup=kb(["🔁 Повторить|car_generate", "← Меню|menu_main"]))
         return
 
@@ -898,8 +932,8 @@ async def _callback_inner(
                            reply_markup=kb(["☰ Главное меню|menu_main"]))
         except ValueError:
             await edit(query,
-                       "❌ Пробный период уже был использован.\n\n"
-                       "Оформи подписку для продолжения.",
+                       "Пробный период уже использовала.\n\n"
+                       "Оформи подписку — и продолжим работу 👇",
                        parse_mode="Markdown",
                        reply_markup=kb(["💳 Оформить подписку|sub_pay",
                                         "← Назад|sub_cabinet"]))
@@ -1496,7 +1530,7 @@ async def _callback_inner(
         if not pending:
             await edit(query, "Нет ожидающего запроса.", reply_markup=kb(["← Меню|menu_main"]))
             return
-        await kv_set(user_id, "__voice_edit_mode__", "1")
+        await kv_set(user_id, "__voice_edit_mode__", "1", ttl=3600)
         await edit(query,
                    f"✏️ Отредактируй и отправь:\n\n`{pending}`",
                    parse_mode="Markdown",
@@ -1578,7 +1612,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _show_paywall(update, user_id, state)
         return
 
-    status = await update.message.reply_text("🎙 Расшифровываю...")
+    status = await update.message.reply_text("Слушаю...")
     try:
         file     = await update.message.voice.get_file()
         ogg_data = await file.download_as_bytearray()
@@ -1588,7 +1622,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         try: await status.delete()
         except: pass
         await send(update,
-                   "❌ Голосовые сообщения недоступны: OPENAI_KEY не задан в переменных окружения.")
+                   "Голосовые сообщения пока недоступны. Напиши текстом — я отвечу так же быстро 🙏")
         return
 
     try: await status.delete()
@@ -1600,7 +1634,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Сохраняем расшифровку и показываем с кнопками
     clean = text.strip()
-    await kv_set(user_id, "__voice_pending__", clean)
+    await kv_set(user_id, "__voice_pending__", clean, ttl=3600)
     await send(update,
                f"🎙 Расшифровал:\n\n_{clean}_\n\n"
                "Отправить как запрос или хочешь отредактировать?",
@@ -1618,7 +1652,7 @@ async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await _route_inner(update, ctx, user_id, text)
     except Exception as e:
         logger.error(f"_route unhandled: {e}", exc_info=True)
-        await send(update, "❌ Что-то пошло не так. Попробуй ещё раз.",
+        await send(update, "Что-то пошло не так — попробуй ещё раз или напиши /menu",
                    reply_markup=kb(["🔁 Ещё раз|quick_ideas"]))
 
 
@@ -1892,7 +1926,7 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         reply = await chat(history, system=system, model_key=model_key)
     except Exception as e:
         logger.error(f"chat error: {e}")
-        await send(update, "❌ Ошибка. Попробуй ещё раз.",
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
                    reply_markup=kb(["🔁 Повторить|mode_chat", "← Меню|menu_main"]))
         return
     finally:
@@ -1985,7 +2019,7 @@ async def _handle_photo_universal(update: Update, user_id: int, caption: str) ->
     # Если есть подпись — используем её как вопрос
     question = caption if caption else ""
 
-    status = await update.effective_chat.send_message("🔍 Смотрю на фото...")
+    status = await update.effective_chat.send_message("Смотрю...")
     try:
         result = await vision_describe([(b64, "image/jpeg")], question=question)
     except Exception as e:
@@ -1993,7 +2027,7 @@ async def _handle_photo_universal(update: Update, user_id: int, caption: str) ->
         try: await status.delete()
         except: pass
         await send(update,
-                   "❌ Не удалось проанализировать фото. Попробуй ещё раз.",
+                   "Фото не открылось — попробуй ещё раз 🔁",
                    reply_markup=main_menu_kb())
         return
     try: await status.delete()
@@ -2017,14 +2051,14 @@ async def _rs_handle_photo(update: Update, user_id: int, s: dict, caption: str) 
         if step == "await_topic" else
         "Опиши детали, факты или историю, которую видишь на скриншоте."
     )
-    status = await update.effective_chat.send_message("🔍 Анализирую скрин...")
+    status = await update.effective_chat.send_message("Смотрю что тут...")
     try:
         desc = await vision_describe([(b64, "image/jpeg")], question=q)
     except Exception as e:
         logger.error(f"_rs_handle_photo error: {e}")
         try: await status.delete()
         except: pass
-        await send(update, "❌ Не смог прочитать скрин. Опиши тему текстом.")
+        await send(update, "Скрин не открылся — опиши тему текстом 🙏")
         return
     try: await status.delete()
     except: pass
@@ -2047,7 +2081,7 @@ async def _car_handle_photo(update: Update, user_id: int, s: dict, caption: str)
     ih      = s.get("interview_history", [])
     caption_text = caption if caption else "Посмотри на этот скриншот и задай следующий вопрос."
 
-    status = await update.effective_chat.send_message("🔍 Изучаю скриншот...")
+    status = await update.effective_chat.send_message("Изучаю скриншот...")
     try:
         reply = await vision_chat(
             history=ih,
@@ -2060,7 +2094,7 @@ async def _car_handle_photo(update: Update, user_id: int, s: dict, caption: str)
         logger.error(f"_car_handle_photo error: {e}")
         try: await status.delete()
         except: pass
-        await send(update, "❌ Не смог обработать скрин. Опиши словами.",
+        await send(update, "Скрин не открылся — опиши словами 🙏",
                    reply_markup=kb(["⏭ Пропустить, генерируй|car_generate"]))
         return
     try: await status.delete()
@@ -2073,24 +2107,28 @@ async def _car_handle_photo(update: Update, user_id: int, s: dict, caption: str)
     s["q_count"] = s.get("q_count", 0) + 1
     await save_agent_session(user_id, _CAR_KEY, s)
 
-    if "генерирую карусель" in reply.lower() or s["q_count"] >= 5:
-        await send(update, reply, parse_mode="Markdown")
+    clean_reply = reply.replace("[READY]", "").replace("[ready]", "").strip()
+    if "[ready]" in reply.lower() or s["q_count"] >= 5:
+        await send(update, clean_reply, parse_mode="Markdown")
         await _car_generate(update, user_id, s)
     else:
-        await send(update, reply, parse_mode="Markdown",
+        await send(update, clean_reply, parse_mode="Markdown",
                    reply_markup=kb(["⏭ Достаточно, генерируй|car_generate"]))
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 async def _detect_active_agent(user_id: int) -> str | None:
-    """Ищет активный generic-агент (кроме кастомных flows) через Redis."""
-    from db import _agent_key
-    skip = {_agent_key(_RS_KEY), _agent_key(_CAR_KEY)}
-    keys = await kv_keys_matching(user_id, "__agent__*__")
-    for k in keys:
-        if k not in skip:
-            return k[len("__agent__"):-len("__")]
+    """Ищет активный generic-агент через явный ключ (O(1) вместо SCAN O(N))."""
+    active = await kv_get(user_id, "__active_agent__")
+    if not active or active in (_RS_KEY, _CAR_KEY):
+        return None
+    # Verify session still exists (could have expired via TTL)
+    session = await get_agent_session(user_id, active)
+    if session:
+        return active
+    # Session gone — clean up stale pointer
+    await kv_del(user_id, "__active_agent__")
     return None
 
 
@@ -2125,7 +2163,7 @@ async def _qi_start(update: Update, user_id: int) -> None:
     else:
         _qi_caption = ("🧠 *Мозговой штурм*\n\nДля какой ниши генерировать идеи?\n"
                        "_Можешь написать любую тему_")
-        if not await _send_photo(update, "9idei.png", _qi_caption,
+        if not await _send_photo(update, "posti8.png", _qi_caption,
                                  kb(["← Меню|menu_main"]), "Markdown"):
             await send(update, _qi_caption, parse_mode="Markdown",
                        reply_markup=kb(["← Меню|menu_main"]))
@@ -2136,13 +2174,13 @@ async def _qi_generate(update: Update, user_id: int, niche: str) -> None:
               f"Аудитория: {profile.get('audience','не указана')}\n"
               f"Тон: {profile.get('tone','живой')}\n\n"
               "Дай 10 конкретных идей для постов. Нумерованный список, без вступлений.")
-    status = await update.effective_chat.send_message("💡 Генерирую 10 идей...")
+    status = await update.effective_chat.send_message("Пишу 10 идей...")
     try:
         _qi_sys = _protect(user_id, await get_prompt(user_id, "quick_ideas", QUICK_IDEAS_SYSTEM))
         result = await complete(_qi_sys, prompt)
     except Exception as e:
         logger.error(f"quick_ideas error: {e}")
-        result = "❌ Ошибка. Попробуй снова."
+        result = "Что-то сломалось — нажми ещё раз 🔁"
     try: await status.delete()
     except: pass
     await clear_agent_session(user_id, _QI_KEY)
@@ -2267,7 +2305,7 @@ async def _refine_start(update: Update, user_id: int, result_id: int = 0) -> Non
 async def _refine_do(update: Update, user_id: int, instruction: str, s: dict) -> None:
     original = s.get("original", "")
     prompt = f"Оригинальный текст:\n{original}\n\nЗадача: {instruction}"
-    status = await update.effective_chat.send_message("✏️ Дорабатываю...")
+    status = await update.effective_chat.send_message("Дорабатываю...")
     try:
         _refine_sys = _protect(user_id, await get_prompt(user_id, "refine", REFINE_SYSTEM))
         result = await complete(_refine_sys, prompt)
@@ -2278,7 +2316,7 @@ async def _refine_do(update: Update, user_id: int, instruction: str, s: dict) ->
     except: pass
     await clear_agent_session(user_id, _REFINE_KEY)
     if not result:
-        await send(update, "❌ Ошибка. Попробуй снова.",
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
                    reply_markup=kb(["✏️ Повторить|refine_last", "← Меню|menu_main"]))
         return
     # Сохраняем доработанную версию
@@ -2308,7 +2346,7 @@ async def _regen_by_id(update: Update, user_id: int, result_id: int) -> None:
         await send(update, "Материал не найден.", reply_markup=kb(["← Меню|menu_main"]))
         return
     prompt = f"Оригинал:\n{r['content']}"
-    status = await update.effective_chat.send_message("🔄 Генерирую другой вариант...")
+    status = await update.effective_chat.send_message("Пишу другой вариант...")
     try:
         _regen_sys = _protect(user_id, await get_prompt(user_id, "regen", REGEN_SYSTEM))
         result = await complete(_regen_sys, prompt)
@@ -2318,7 +2356,7 @@ async def _regen_by_id(update: Update, user_id: int, result_id: int) -> None:
     try: await status.delete()
     except: pass
     if not result:
-        await send(update, "❌ Ошибка. Попробуй снова.",
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
                    reply_markup=kb(["🔄 Ещё раз|regen_last", "← Меню|menu_main"]))
         return
     try:
@@ -2374,7 +2412,7 @@ async def _planner_gen_week(update: Update, user_id: int) -> None:
     prompt = (f"Ниша: {profile.get('niche','не указана')}\n"
               f"Аудитория: {profile.get('audience','не указана')}\n\n"
               f"Даты: {', '.join(dates)}\n\nСоставь план на 7 дней.")
-    status = await update.effective_chat.send_message("📅 Составляю план на неделю...")
+    status = await update.effective_chat.send_message("Составляю план...")
     try:
         # BUG FIX: was the only LLM call without _protect() — inconsistent with all other
         # agent calls and vulnerable to prompt injection (users could exfiltrate system prompt).
@@ -2385,7 +2423,7 @@ async def _planner_gen_week(update: Update, user_id: int) -> None:
     try: await status.delete()
     except: pass
     if not result:
-        await send(update, "❌ Ошибка. Попробуй снова.", reply_markup=kb(["← Планировщик|planner_show"]))
+        await send(update, "Что-то сломалось — нажми ещё раз 🔁", reply_markup=kb(["← Планировщик|planner_show"]))
         return
     await send(update, f"📅 *План на неделю:*\n\n{result}",
                parse_mode="Markdown",

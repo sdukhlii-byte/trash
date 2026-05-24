@@ -128,9 +128,12 @@ async def kv_get(user_id: int, key: str) -> str | None:
     return await r.get(_rkey(user_id, key))
 
 
-async def kv_set(user_id: int, key: str, value: str) -> None:
+async def kv_set(user_id: int, key: str, value: str, ttl: int | None = None) -> None:
     r = await get_redis()
-    await r.set(_rkey(user_id, key), value)
+    if ttl:
+        await r.set(_rkey(user_id, key), value, ex=ttl)
+    else:
+        await r.set(_rkey(user_id, key), value)
 
 
 async def kv_del(user_id: int, key: str) -> None:
@@ -160,7 +163,29 @@ async def get_profile(user_id: int) -> dict:
     return {"niche": "", "audience": "", "tone": "", "onboarded": False}
 
 
+import re as _re
+
+_INJECTION_PATTERNS = _re.compile(
+    r"(ignore\s+(previous|all|prior)|system\s*prompt|</?system>|\[INST\]|"
+    r"забудь\s+(все|предыдущие)|игнорируй\s+инструкции|покажи\s+системный\s*промпт)",
+    _re.IGNORECASE,
+)
+
+def _sanitize_profile_field(value: str, max_len: int = 300) -> str:
+    """Strip prompt injection patterns and cap length."""
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()[:max_len]
+    # Replace injection patterns with a safe placeholder
+    value = _INJECTION_PATTERNS.sub("[…]", value)
+    return value
+
+
 async def save_profile(user_id: int, data: dict) -> None:
+    # Sanitize text fields before storing
+    for field in ("niche", "audience", "tone"):
+        if field in data and isinstance(data[field], str):
+            data[field] = _sanitize_profile_field(data[field])
     await kv_set(user_id, "__profile__", json.dumps(data, ensure_ascii=False))
 
 
@@ -231,6 +256,10 @@ def _agent_key(agent: str) -> str:
     return f"__agent__{agent}__"
 
 
+_AGENT_SESSION_TTL = 86400      # 24 hours — sessions expire if user abandons
+_ONBOARDING_TTL   = 604800     # 7 days  — onboarding survives across days
+
+
 async def get_agent_session(user_id: int, agent: str) -> dict | None:
     raw = await kv_get(user_id, _agent_key(agent))
     if raw:
@@ -240,7 +269,8 @@ async def get_agent_session(user_id: int, agent: str) -> dict | None:
 
 
 async def save_agent_session(user_id: int, agent: str, state: dict) -> None:
-    await kv_set(user_id, _agent_key(agent), json.dumps(state, ensure_ascii=False))
+    await kv_set(user_id, _agent_key(agent),
+                 json.dumps(state, ensure_ascii=False), ttl=_AGENT_SESSION_TTL)
 
 
 async def clear_agent_session(user_id: int, agent: str) -> None:
@@ -261,6 +291,8 @@ async def clear_all_agent_sessions(user_id: int) -> None:
         r = await get_redis()
         prefix = f"bot:kv:{user_id}:"
         await r.delete(*[prefix + k for k in keys])
+    # FIX: also clear the explicit active agent pointer
+    await kv_del(user_id, "__active_agent__")
 
 
 async def clear_all(user_id: int) -> None:
@@ -281,7 +313,8 @@ async def get_onboarding_state(user_id: int) -> dict | None:
 
 
 async def save_onboarding_state(user_id: int, state: dict) -> None:
-    await kv_set(user_id, "__onboarding__", json.dumps(state, ensure_ascii=False))
+    await kv_set(user_id, "__onboarding__",
+                 json.dumps(state, ensure_ascii=False), ttl=_ONBOARDING_TTL)
 
 
 async def clear_onboarding_state(user_id: int) -> None:

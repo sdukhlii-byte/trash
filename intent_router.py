@@ -293,11 +293,13 @@ async def classify_intent(text: str, profile: dict | None = None) -> IntentResul
             system=_CLASSIFIER_SYSTEM,
             user=user_prompt,
             model_key="claude",
-            max_tokens=120,
+            max_tokens=200,  # FIX: was 120 — could truncate JSON and cause ParseError
         )
         raw = raw.strip()
-        # Убираем возможные markdown-блоки
         raw = re.sub(r"```(?:json)?|```", "", raw).strip()
+        # FIX: if response is truncated (no closing brace), attempt to close it
+        if raw and not raw.rstrip().endswith("}"):
+            raw = raw.rstrip().rstrip(",") + "}"
         data = json.loads(raw)
         return IntentResult(
             agent=data.get("agent", "chat"),

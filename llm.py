@@ -10,7 +10,8 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
-SEM: asyncio.Semaphore | None = None
+SEM_FAST: asyncio.Semaphore | None = None   # short calls: classify, complete <1000 tok
+SEM_HEAVY: asyncio.Semaphore | None = None  # long calls: generate_from_history, complete_long
 
 # ── Shared httpx client (один TCP-пул на весь процесс) ───────────────────────
 _HTTP: httpx.AsyncClient | None = None
@@ -40,14 +41,16 @@ async def close_http() -> None:
         logger.info("Shared httpx client closed")
 
 
-def init_semaphore(size: int) -> None:
-    global SEM
-    SEM = asyncio.Semaphore(size)
+def init_semaphore(size_fast: int, size_heavy: int) -> None:
+    global SEM_FAST, SEM_HEAVY
+    SEM_FAST  = asyncio.Semaphore(size_fast)
+    SEM_HEAVY = asyncio.Semaphore(size_heavy)
 
 
 # ── raw request ───────────────────────────────────────────────────────────────
-async def _call(payload: dict, timeout: float = LLM_TIMEOUT) -> str:
-    assert SEM, "Semaphore not initialised"
+async def _call(payload: dict, timeout: float = LLM_TIMEOUT, heavy: bool = False) -> str:
+    sem = SEM_HEAVY if heavy else SEM_FAST
+    assert sem, "Semaphore not initialised"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type":  "application/json",
@@ -57,7 +60,7 @@ async def _call(payload: dict, timeout: float = LLM_TIMEOUT) -> str:
     last = None
     for attempt in range(LLM_RETRY):
         try:
-            async with SEM:
+            async with sem:
                 resp = await get_http().post(OPENROUTER_URL, json=payload, headers=headers,
                                               timeout=timeout)
 
@@ -123,7 +126,7 @@ async def complete_long(system: str, user: str,
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ],
-    }, timeout=GEN_TIMEOUT)
+    }, timeout=GEN_TIMEOUT, heavy=True)
 
 
 async def generate_from_history(system: str, history: list,
@@ -138,7 +141,7 @@ async def generate_from_history(system: str, history: list,
             *history,
             {"role": "user",   "content": final_prompt},
         ],
-    }, timeout=GEN_TIMEOUT)
+    }, timeout=GEN_TIMEOUT, heavy=True)
 
 
 async def vision_complete(system: str, text_ctx: str,
