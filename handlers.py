@@ -244,7 +244,7 @@ async def _rs_start(update: Update, user_id: int) -> None:
     await save_agent_session(user_id, _RS_KEY, {"step": "await_topic"})
     _rs_caption = ("🎬 *Хуки для рилса*\n\nНапиши тему рилса:\n\n"
                    "_Например: делегирование / выгорание / как поднять цену_")
-    if not await _send_photo(update, "posti5.png", _rs_caption,
+    if not await _send_photo(update, "2huki.png", _rs_caption,
                              kb(["← Меню|menu_main"]), "Markdown"):
         await send(update, _rs_caption, parse_mode="Markdown",
                    reply_markup=kb(["← Меню|menu_main"]))
@@ -2125,7 +2125,7 @@ async def _qi_start(update: Update, user_id: int) -> None:
     else:
         _qi_caption = ("🧠 *Мозговой штурм*\n\nДля какой ниши генерировать идеи?\n"
                        "_Можешь написать любую тему_")
-        if not await _send_photo(update, "posti8.png", _qi_caption,
+        if not await _send_photo(update, "9idei.png", _qi_caption,
                                  kb(["← Меню|menu_main"]), "Markdown"):
             await send(update, _qi_caption, parse_mode="Markdown",
                        reply_markup=kb(["← Меню|menu_main"]))

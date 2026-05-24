@@ -43,7 +43,7 @@ register(AgentSpec(
     max_q        = 6,
     accept_photos= True,
     model        = "claude",
-    photo        = "posti13.png",
+    photo        = "6analitika.png",
 ))
 
 
@@ -74,6 +74,7 @@ register(AgentSpec(
     pick_prompt      = "Напиши номер понравившегося захода:",
     max_q            = 5,
     model            = "claude",
+    photo            = "4storis.png",
 ))
 
 
@@ -160,6 +161,7 @@ register(AgentSpec(
     final_prompt = "Напиши детальный прогрев на 3 дня с конкретными текстами. Используй профиль автора: язык ЦА, их возражения, их боли. Не шаблон — живые тексты.",
     max_q        = 5,
     model        = "claude",
+    photo        = "5progrev.png",
 ))
 
 
@@ -223,6 +225,7 @@ register(AgentSpec(
     final_prompt = "Напиши полный сценарий мультика строго по структуре. Персонажи и ситуации — узнаваемые для аудитории из профиля. + 3 идеи для продолжения.",
     max_q        = 4,
     model        = "claude",
+    photo        = "8animati.png",
 ))
 
 
@@ -244,6 +247,7 @@ register(AgentSpec(
     final_prompt = "Напиши готовый текстовый пост в тоне голоса из профиля автора. Первая строка — под боль/желание ЦА. Только текст — без пояснений.",
     max_q        = 3,
     model        = "claude",
+    photo        = "1napis.png",
 ))
 
 
