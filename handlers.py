@@ -149,7 +149,7 @@ def main_menu_kb() -> InlineKeyboardMarkup:
         ["💬 Спроси продюсера|mode_chat"],
         ["🗓 Контент-план|planner_show",                  "☀️ Брифинг|daily_menu"],
         ["🗂 Моя база|my_results",                       "📈 Мой рост|my_stats"],
-        ["👤 Личный кабинет|sub_cabinet",                "🎭 Мой голос|menu_profile"],
+        ["👤 Кабинет|sub_cabinet"],
         ["🆘 Поддержка|support"],
     )
 
@@ -633,11 +633,21 @@ async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _show_cabinet(update, user_id: int) -> None:
-    """Личный кабинет — адаптируется под текущее состояние."""
+    """Кабинет — подписка + профиль в одном экране."""
     state = await get_user_state(user_id)
     status_text = await render_status(user_id)
-    sub = await get_subscription(user_id)
-    trial = await get_trial(user_id)
+    p = await get_profile(user_id)
+    from db import get_style_examples
+    examples = await get_style_examples(user_id)
+    ex_count = len(examples)
+
+    profile_line = (
+        f"\n\n*Профиль:*\n"
+        f"Ниша: {profile_val(p, 'niche')}\n"
+        f"Аудитория: {profile_val(p, 'audience')}\n"
+        f"Тон: {profile_val(p, 'tone')}\n"
+        f"Примеры стиля: {ex_count}/10"
+    )
 
     rows = []
     if state == UserState.ONBOARDED:
@@ -650,11 +660,12 @@ async def _show_cabinet(update, user_id: int) -> None:
     elif state == UserState.EXPIRED:
         rows.append(["🔄 Возобновить подписку|sub_pay"])
 
-    rows.append(["🧾 История платежей|cab_history"])
-    rows.append(["👥 Реферальная программа|cab_referral"])
+    rows.append(["✏️ Изменить профиль|profile_edit",  "📝 Стиль|style_menu"])
+    rows.append(["🧾 История платежей|cab_history",    "👥 Реферал|cab_referral"])
+    rows.append(["🤖 Сменить модель|profile_model"])
     rows.append(["← Меню|menu_main"])
 
-    await send(update, f"👤 *Личный кабинет*\n\n{status_text}",
+    await send(update, f"⚙️ *Кабинет*\n\n{status_text}{profile_line}",
                parse_mode="Markdown", reply_markup=kb(*rows))
 
 
@@ -958,6 +969,7 @@ async def _callback_inner(
     # ── Поддержка ──
     if data == "support":
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
+        await query.answer()
         await update.effective_chat.send_message(
                    f"🆘 Поддержка\n\n"
                    f"Если возникли вопросы по работе бота или оплате — пиши напрямую.\n\n"
