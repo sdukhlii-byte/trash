@@ -14,6 +14,7 @@ handlers.py
 import asyncio
 import base64
 import json
+import os
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
@@ -735,7 +736,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
-        if not await _send_photo(update, "posti.png", MIRA_INTRO, None, None):
+        if not await _send_photo(update, "posti.png", MIRA_INTRO, None, "Markdown"):
             await send(update, MIRA_INTRO)
         await _onb_next(update, user_id, new_state)
         return
@@ -750,7 +751,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             days_left = max(0, (exp - datetime.now(timezone.utc)).days)
             expires_str = f"\n\n⏳ _Пробный период: осталось {days_left} дн._"
         _caption = f"Снова здесь{expires_str}\n\nЧто делаем?"
-        if not await _send_photo(update, "posti1.png", _caption, main_menu_kb()):
+        if not await _send_photo(update, "posti1.png", _caption, main_menu_kb(), "Markdown"):
             sent = await update.message.reply_text(
                 _caption, parse_mode="Markdown", reply_markup=main_menu_kb()
             )
@@ -827,6 +828,20 @@ async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await kv_del(user_id, "__profile__")
     await kv_del(user_id, "__model__")
     await kv_del(user_id, "__onboarding__")
+
+    # Сбрасываем push_log для onboarded-цепочки — иначе после сброса
+    # get_push_step вернёт 4 и онбординг-пуши больше никогда не придут
+    try:
+        from db import _get_pool
+        pool = _get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM push_log WHERE user_id=$1 AND push_type='onboarded'",
+                user_id,
+            )
+    except Exception as _e:
+        logger.warning(f"cmd_reset: could not clear push_log for {user_id}: {_e}")
+
     state = {"step": 0, "data": {}}
     await save_onboarding_state(user_id, state)
     await _onb_next(update, user_id, state)
@@ -969,7 +984,7 @@ async def _callback_inner(
     # ── Поддержка ──
     if data == "support":
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup as IKM
-        await query.answer()
+        # query уже answered в callback() — не дублируем
         await update.effective_chat.send_message(
                    f"🆘 Поддержка\n\n"
                    f"Если возникли вопросы по работе бота или оплате — пиши напрямую.\n\n"
@@ -1029,7 +1044,9 @@ async def _callback_inner(
                        ["← Меню|menu_main"],
                    ))
     elif data == "profile_edit":
-        state = {"step": 0, "data": {}}
+        # source="profile_edit" — флаг для _route_inner: не сбрасывать онбординг
+        # даже если у юзера есть история чата (это намеренное редактирование)
+        state = {"step": 0, "data": {}, "source": "profile_edit"}
         await save_onboarding_state(user_id, state)
         await edit(query, "Обновим профиль 👇")
         await _onb_next(update, user_id, state)
@@ -1601,12 +1618,14 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     onb = await get_onboarding_state(user_id)
     if onb:
         # Глобальная защита: если у юзера есть активная агент-сессия ИЛИ
-        # история чата — онбординг был открыт случайно (напр. через "Изменить профиль").
-        # Сбрасываем онбординг чтобы ответы не перезаписали профиль.
+        # история чата — онбординг был открыт случайно.
+        # Исключение: source="profile_edit" — намеренное редактирование профиля,
+        # НЕ сбрасываем даже при наличии истории чата.
+        is_intentional = onb.get("source") in ("profile_edit",)
         active_agent = await _detect_active_agent(user_id)
         model_key = await get_model(user_id)
         chat_history = await get_history(user_id, model_key, "chat")
-        if active_agent or chat_history:
+        if (active_agent or chat_history) and not is_intentional:
             await clear_onboarding_state(user_id)
             onb = None
         else:
