@@ -472,7 +472,8 @@ async def _car_format_chosen(update: Update, user_id: int, fmt: str, s: dict) ->
 
 async def _car_trigger_chosen(update: Update, user_id: int, trigger: str, s: dict) -> None:
     te, tn, _ = CAROUSEL_TRIGGERS_20[trigger]
-    fe, fn    = CAROUSEL_FORMATS_4[s["fmt"]]
+    # BUG FIX: s["fmt"] raises KeyError on a corrupted/partial session; use .get() with safe default
+    fe, fn    = CAROUSEL_FORMATS_4.get(s.get("fmt", "list"), ("📋", "Список"))
     profile   = await get_profile(user_id)
     ctx       = (f"Тема: {s.get('chosen_headline', s.get('topic',''))}\n"
                  f"Формат: {fn}\nТриггер: {tn}\n"
@@ -553,11 +554,16 @@ async def _car_generate(update: Update, user_id: int, s: dict) -> None:
     try: await status.delete()
     except: pass
 
-    await clear_agent_session(user_id, _CAR_KEY)
+    # BUG FIX: session was previously cleared BEFORE the result check, meaning on LLM
+    # failure the user lost all their interview data and had no way to retry. Now we
+    # only clear on success, so the "🔁 Новая карусель" button still works and on error
+    # the "car_generate" button can retry with the same accumulated data.
     if not result:
         await send(update, "❌ Ошибка. Попробуй снова.",
-                   reply_markup=kb(["← Меню|menu_main"]))
+                   reply_markup=kb(["🔁 Повторить|car_generate", "← Меню|menu_main"]))
         return
+
+    await clear_agent_session(user_id, _CAR_KEY)
 
     try:
         headline = s.get("chosen_headline", s.get("topic", ""))
@@ -1547,6 +1553,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not unicodedata.category(ch).startswith("C") or ch in ("\n", "\r", "\t")
     ).strip()
     if not text: return
+    # BUG FIX: truncate oversized input to prevent LLM token bombs and context overflow.
+    # Telegram allows long messages via API; an abuser can send 100K chars and exhaust
+    # the context window or spike costs. Telegram's own UI caps at ~4096 chars anyway.
+    MAX_INPUT = 4000
+    if len(text) > MAX_INPUT:
+        text = text[:MAX_INPUT]
     lock = await _get_user_lock(user_id)
     if lock.locked():
         # Юзер нажал дважды — тихо игнорируем дубль
@@ -2364,7 +2376,9 @@ async def _planner_gen_week(update: Update, user_id: int) -> None:
               f"Даты: {', '.join(dates)}\n\nСоставь план на 7 дней.")
     status = await update.effective_chat.send_message("📅 Составляю план на неделю...")
     try:
-        result = await complete(PLANNER_IDEAS_SYSTEM, prompt)
+        # BUG FIX: was the only LLM call without _protect() — inconsistent with all other
+        # agent calls and vulnerable to prompt injection (users could exfiltrate system prompt).
+        result = await complete(_protect(user_id, PLANNER_IDEAS_SYSTEM), prompt)
     except Exception as e:
         logger.error(f"planner_week error: {e}")
         result = None

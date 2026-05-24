@@ -263,11 +263,18 @@ async def grant_trial(user_id: int) -> dict:
     now = datetime.now(timezone.utc)
     expires = now + timedelta(days=TRIAL_DAYS)
     async with pool.acquire() as conn:
-        await conn.execute(
+        result = await conn.execute(
             "INSERT INTO trials (user_id, started_at, expires_at) VALUES ($1, $2, $3) "
             "ON CONFLICT (user_id) DO NOTHING",
             user_id, now, expires
         )
+    # BUG FIX: ON CONFLICT DO NOTHING silently discards a concurrent second insert.
+    # Without this check, two concurrent requests could both pass has_used_trial()
+    # (the per-user lock prevents same-session double-tap, but two separate device
+    # sessions could race). Both would return "success" even though only one trial
+    # was actually inserted. Now the second caller gets the correct ValueError.
+    if result.split()[-1] == "0":  # "INSERT 0 0" → conflict, nothing inserted
+        raise ValueError("Trial already used")
     await _invalidate_cache(user_id)
     logger.info(f"Trial granted: user={user_id} expires={expires.isoformat()}")
     return {"started_at": now.isoformat(), "expires_at": expires.isoformat()}
