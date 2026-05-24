@@ -43,6 +43,7 @@ register(AgentSpec(
     max_q        = 6,
     accept_photos= True,
     model        = "claude",
+    photo        = "posti13.png",
 ))
 
 
@@ -94,6 +95,7 @@ register(AgentSpec(
     final_prompt = "Напиши адаптированный сценарий рилса строго по структуре. Адаптируй под аудиторию и тон голоса из профиля автора.",
     max_q        = 4,
     model        = "claude",
+    photo        = "posti5.png",
 ))
 
 
@@ -116,6 +118,7 @@ register(AgentSpec(
     final_prompt = "Создай детальный контент-план строго по структуре. Каждая тема и хук — через призму аудитории из профиля. Конкретные формулировки, не шаблоны.",
     max_q        = 5,
     model        = "claude",
+    photo        = "posti11.png",
 ))
 
 
@@ -200,6 +203,7 @@ register(AgentSpec(
     ),
     max_q        = 5,
     model        = "claude",
+    photo        = "posti6.png",
 ))
 
 
@@ -287,4 +291,5 @@ register(AgentSpec(
     accept_photos= True,
     max_q        = 4,
     model        = "claude",
+    photo        = "posti14.png",
 ))

@@ -52,6 +52,7 @@ class AgentSpec:
     model:            str           = "claude"
     has_pick_step:    bool          = False
     pick_prompt:      str           = ""
+    photo:            str           = ""   # имя файла картинки для welcome-экрана
 
 
 # ── registry ──────────────────────────────────────────────────────────────────
@@ -85,8 +86,32 @@ async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
         "initial": "", "history": [], "q_count": 0,
         "picked": "", "extra": {}, "photos": [],
     })
-    await send(update, spec.welcome, parse_mode="Markdown",
-               reply_markup=kb(["← Меню|menu_main"]))
+    _kb = kb(["← Меню|menu_main"])
+    if spec.photo:
+        _dirs = [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]
+        _sent = False
+        for _d in _dirs:
+            _p = os.path.join(_d, spec.photo)
+            if os.path.exists(_p):
+                try:
+                    chat_id = update.effective_chat.id
+                    bot = update.get_bot()
+                    with open(_p, "rb") as _f:
+                        await bot.send_photo(
+                            chat_id=chat_id,
+                            photo=_f,
+                            caption=spec.welcome,
+                            parse_mode="Markdown",
+                            reply_markup=_kb,
+                        )
+                    _sent = True
+                    break
+                except Exception as e:
+                    logger.error(f"[agent photo] {spec.photo}: {e}")
+        if not _sent:
+            await send(update, spec.welcome, parse_mode="Markdown", reply_markup=_kb)
+    else:
+        await send(update, spec.welcome, parse_mode="Markdown", reply_markup=_kb)
 
 
 async def handle_text(update: Update, user_id: int,

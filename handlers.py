@@ -385,10 +385,12 @@ _CAR_KEY = "carousel_flow"
 async def _car_start(update: Update, user_id: int) -> None:
     await clear_agent_session(user_id, _CAR_KEY)
     await save_agent_session(user_id, _CAR_KEY, {"step": "await_topic"})
-    await send(update,
-               "🎠 *Каруселькин*\n\nНапиши тему карусели одним предложением:\n\n"
-               "_Например: «5 ошибок при запуске рекламы»_",
-               parse_mode="Markdown", reply_markup=kb(["← Меню|menu_main"]))
+    _car_caption = ("🎠 *Карусель*\n\nНапиши тему одним предложением:\n\n"
+                    "_Например: «5 ошибок при запуске рекламы»_")
+    if not await _send_photo(update, "posti12.png", _car_caption,
+                             kb(["← Меню|menu_main"]), "Markdown"):
+        await send(update, _car_caption, parse_mode="Markdown",
+                   reply_markup=kb(["← Меню|menu_main"]))
 
 async def _car_check_trend(update: Update, user_id: int, topic: str, s: dict) -> None:
     profile = await get_profile(user_id)
