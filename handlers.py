@@ -971,8 +971,9 @@ async def _callback_inner(
     if data == "menu_main":
         await clear_all_agent_sessions(user_id)
         current_msg_id = query.message.message_id
+        has_photo = bool(query.message.photo)
         msg_text = query.message.text or query.message.caption or ""
-        is_nav_msg = len(msg_text) < 300  # короткое служебное — редактируем на месте
+        is_nav_msg = not has_photo and len(msg_text) < 300
 
         if is_nav_msg:
             await edit(query, "Что делаем? 👇", reply_markup=main_menu_kb())
