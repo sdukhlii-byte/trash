@@ -11,7 +11,7 @@ retention.py — система удержания пользователей.
   EXPIRED    → был доступ, истёк → пушим возврат (4 касания)
 
 Антиспам:
-  • Один пуш в сутки максимум на пользователя
+  • Один пуш в сутки максимум на пользователя (кроме шага 0 в цепочке ONBOARDED)
   • После N касаний без реакции — прекращаем
   • Разные тексты на каждом шаге — не копипаст
 
@@ -284,31 +284,66 @@ async def was_trial_warned(user_id: int) -> bool:
 async def get_onboarded_users_without_access() -> list[int]:
     """
     Пользователи с профилем, без подписки и без активного триала.
-    Смотрим Redis-ключи профилей.
+
+    Сначала пробуем Redis (быстро), при ошибке — фоллбэк на PostgreSQL
+    (таблица profiles / subscriptions / trials).
     """
     from db import get_redis, _get_pool
-    r = await get_redis()
-    user_ids = []
-    async for key in r.scan_iter("bot:kv:*:__profile__"):
-        try:
-            parts = key.split(":")
-            uid = int(parts[2])
-            raw = await r.get(key)
-            if not raw:
-                continue
-            profile = json.loads(raw)
-            if not profile.get("onboarded"):
-                continue
-            # Проверяем нет ли подписки
-            from lava_payments import get_subscription, get_trial
-            sub = await get_subscription(uid)
-            trial = await get_trial(uid)
-            if sub or trial:
-                continue
-            user_ids.append(uid)
-        except Exception as e:
-            logger.warning(f"get_onboarded_users error key={key}: {e}")
-    return user_ids
+
+    # ── Попытка через Redis ──────────────────────────────────────────────────
+    try:
+        r = await get_redis()
+        user_ids = []
+        async for key in r.scan_iter("bot:kv:*:__profile__"):
+            try:
+                parts = key.split(":")
+                uid = int(parts[2])
+                raw = await r.get(key)
+                if not raw:
+                    continue
+                profile = json.loads(raw)
+                if not profile.get("onboarded"):
+                    continue
+                from lava_payments import get_subscription, get_trial
+                sub = await get_subscription(uid)
+                trial = await get_trial(uid)
+                if sub or trial:
+                    continue
+                user_ids.append(uid)
+            except Exception as e:
+                logger.warning(f"get_onboarded_users redis key={key}: {e}")
+        if user_ids:
+            logger.info(f"Retention: found {len(user_ids)} onboarded users via Redis")
+            return user_ids
+        # Redis вернул 0 — возможно ключей нет совсем, пробуем PG
+    except Exception as e:
+        logger.warning(f"Redis unavailable in get_onboarded_users, falling back to PG: {e}")
+
+    # ── Фоллбэк: PostgreSQL ──────────────────────────────────────────────────
+    try:
+        pool = _get_pool()
+        async with pool.acquire() as conn:
+            # Берём всех у кого есть профиль (onboarded=true в jsonb или bool-колонка)
+            # Адаптируй запрос под свою схему если нужно
+            rows = await conn.fetch("""
+                SELECT DISTINCT p.user_id
+                FROM profiles p
+                WHERE p.onboarded = TRUE
+                  AND NOT EXISTS (
+                      SELECT 1 FROM subscriptions s
+                      WHERE s.user_id = p.user_id AND s.expires_at > NOW()
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM trials t
+                      WHERE t.user_id = p.user_id AND t.expires_at > NOW()
+                  )
+            """)
+        result = [r["user_id"] for r in rows]
+        logger.info(f"Retention: found {len(result)} onboarded users via PG fallback")
+        return result
+    except Exception as e:
+        logger.error(f"get_onboarded_users PG fallback failed: {e}", exc_info=True)
+        return []
 
 
 async def get_expired_users() -> list[int]:
@@ -386,18 +421,21 @@ async def send_push(bot: Bot, user_id: int, text: str,
 
 async def push_onboarded_user(bot: Bot, user_id: int) -> None:
     """Отправляет следующий пуш в цепочке ONBOARDED."""
-    if await was_pushed_today(user_id):
-        return
-
     step = await get_push_step(user_id, "onboarded")
     if step >= len(ONBOARDED_CHAIN):
         return
 
     msg = ONBOARDED_CHAIN[step]
 
-    from db import _get_pool
-    now = datetime.now(timezone.utc)
+    # Шаг 0: антиспам НЕ применяем — это первый пуш после онбординга,
+    # он должен уйти даже если сегодня был другой пуш.
+    # Шаги 1+: проверяем и антиспам, и задержку между шагами.
     if step > 0:
+        if await was_pushed_today(user_id):
+            return
+
+        from db import _get_pool
+        now = datetime.now(timezone.utc)
         pool = _get_pool()
         async with pool.acquire() as conn:
             last = await conn.fetchrow("""
@@ -428,9 +466,9 @@ async def push_expired_user(bot: Bot, user_id: int) -> None:
 
     msg = EXPIRED_CHAIN[step]
 
-    from db import _get_pool
-    now = datetime.now(timezone.utc)
     if step > 0:
+        from db import _get_pool
+        now = datetime.now(timezone.utc)
         pool = _get_pool()
         async with pool.acquire() as conn:
             last = await conn.fetchrow("""
@@ -545,9 +583,27 @@ async def run_trial_warnings(bot: Bot) -> None:
 def setup_retention_jobs(app) -> None:
     """
     Регистрирует задания в PTB ApplicationBuilder job_queue.
-    Вызывать из post_init в main.py.
+    Вызывать из _do_init в main.py — ПОСЛЕ app.start() и job_queue.start(),
+    чтобы scheduler уже был жив.
     """
     import datetime as dt
+
+    jq = app.job_queue
+    if jq is None:
+        logger.error(
+            "RETENTION: job_queue is None — пуши не будут работать! "
+            "Убедись что python-telegram-bot установлен с extras [job-queue]: "
+            "pip install 'python-telegram-bot[job-queue]'"
+        )
+        return
+
+    if not jq.scheduler.running:
+        logger.error(
+            "RETENTION: job_queue.scheduler не запущен — задания встанут в очередь "
+            "но не выполнятся. В webhook-режиме вызывай setup_retention_jobs "
+            "только после await app.job_queue.start()."
+        )
+        # Не возвращаемся — регистрируем всё равно, вдруг scheduler стартует позже
 
     async def daily_job(context):
         await run_daily_pushes(context.bot)
@@ -562,12 +618,15 @@ def setup_retention_jobs(app) -> None:
         name="retention_daily",
     )
 
-    # Каждый час
+    # Каждый час; первый запуск через 60 сек после старта
     app.job_queue.run_repeating(
         callback=hourly_job,
         interval=3600,
-        first=60,  # первый запуск через минуту после старта
+        first=60,
         name="retention_hourly",
     )
 
-    logger.info("Retention jobs scheduled: daily@10UTC + hourly trial warnings")
+    logger.info(
+        f"Retention jobs scheduled: daily@10UTC + hourly trial warnings "
+        f"(scheduler_running={jq.scheduler.running})"
+    )

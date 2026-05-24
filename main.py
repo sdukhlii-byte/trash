@@ -41,7 +41,11 @@ def main() -> None:
         .build()
     )
 
-    async def post_init(application: Application) -> None:
+    async def _do_init(application: Application) -> None:
+        """
+        Общая инициализация — вызывается и в polling (через post_init),
+        и в webhook (вручную, после app.start() чтобы job_queue уже был жив).
+        """
         import agents as ag_module
         from telegram import BotCommand
 
@@ -58,6 +62,7 @@ def main() -> None:
             logger.info("HTTP client init OK")
         except Exception as e:
             logger.error(f"HTTP init FAILED: {e}", exc_info=True)
+
         init_semaphore(LLM_SEMAPHORE_SIZE)
         logger.info(f"LLM semaphore ready (size={LLM_SEMAPHORE_SIZE})")
         logger.info(f"Agents registered: {[s.key for s in ag_module.all_specs()]}")
@@ -89,11 +94,16 @@ def main() -> None:
         setup_retention_jobs(application)
         logger.info("Retention jobs registered")
 
+    # ── polling: PTB вызывает post_init сам, до start() — job_queue уже жив
+    async def post_init(application: Application) -> None:
+        await _do_init(application)
+
     async def post_shutdown(application: Application) -> None:
         await close_db()
         await close_http()
         logger.info("Bot shut down cleanly")
 
+    # В polling-режиме PTB управляет жизненным циклом сам
     app.post_init = post_init
     app.post_shutdown = post_shutdown
 
@@ -122,7 +132,6 @@ def main() -> None:
         WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
         async def tg_webhook(request: web.Request) -> web.Response:
-            # Проверяем секретный токен если задан
             if WEBHOOK_SECRET:
                 token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
                 if token != WEBHOOK_SECRET:
@@ -139,16 +148,38 @@ def main() -> None:
         aio_app.router.add_post("/webhook", tg_webhook)
 
         async def run():
+            # 1. initialize() — создаёт bot, updater, job_queue (но не стартует их)
             await app.initialize()
-            await post_init(app)  # вызываем вручную — в aiohttp-режиме PTB не зовёт его сам
+
+            # 2. start() — запускает updater и job_queue.scheduler
+            #    ВАЖНО: делаем ДО _do_init, чтобы job_queue.scheduler уже был жив
+            #    когда setup_retention_jobs регистрирует задания
+            await app.start()
+
+            # 3. Регистрируем webhook в Telegram
             await app.bot.set_webhook(
                 url=WEBHOOK_URL,
                 allowed_updates=Update.ALL_TYPES,
                 drop_pending_updates=True,
                 secret_token=WEBHOOK_SECRET if WEBHOOK_SECRET else None,
             )
-            await app.start()
 
+            # 4. Явно стартуем job_queue (в webhook-режиме PTB не делает это автоматически)
+            if app.job_queue is not None:
+                if not app.job_queue.scheduler.running:
+                    await app.job_queue.start()
+                    logger.info("Job queue scheduler started")
+                else:
+                    logger.info("Job queue scheduler already running")
+            else:
+                logger.error("Job queue is None — retention пуши не будут работать! "
+                             "Убедись что python-telegram-bot установлен с [job-queue]")
+
+            # 5. Инициализируем DB, HTTP, агентов, retention jobs
+            #    job_queue.scheduler уже жив — задания встанут в расписание сразу
+            await _do_init(app)
+
+            # 6. Поднимаем aiohttp сервер
             runner = web.AppRunner(aio_app)
             await runner.setup()
             site = web.TCPSite(runner, "0.0.0.0", PORT)
@@ -164,6 +195,8 @@ def main() -> None:
             except (KeyboardInterrupt, SystemExit):
                 pass
             finally:
+                if app.job_queue is not None and app.job_queue.scheduler.running:
+                    await app.job_queue.stop()
                 await app.stop()
                 await app.shutdown()
                 await runner.cleanup()
@@ -172,6 +205,7 @@ def main() -> None:
 
     else:
         # ── Polling mode (local dev) ──────────────────────────────────────────
+        # PTB сам вызовет post_init → _do_init в правильный момент
         logger.info("Starting polling (no WEBHOOK_URL set)")
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,
