@@ -304,10 +304,24 @@ async def get_onboarded_users_without_access() -> list[int]:
                 profile = json.loads(raw)
                 if not profile.get("onboarded"):
                     continue
-                from lava_payments import get_subscription, get_trial
+                # BUG FIX: exclude EXPIRED users — those who EVER had a trial or subscription.
+                # Previously only active trial/subscription was checked, so expired users
+                # appeared in both ONBOARDED and EXPIRED chains, receiving double pushes.
+                from lava_payments import get_subscription, has_used_trial
                 sub = await get_subscription(uid)
-                trial = await get_trial(uid)
-                if sub or trial:
+                if sub:
+                    continue
+                ever_had_trial = await has_used_trial(uid)
+                if ever_had_trial:
+                    continue
+                # Also exclude users who ever had a subscription (even expired/cancelled)
+                from db import _get_pool as _pg_pool
+                _pg = _pg_pool()
+                async with _pg.acquire() as conn:
+                    had_sub = await conn.fetchrow(
+                        "SELECT 1 FROM subscriptions WHERE user_id=$1", uid
+                    )
+                if had_sub:
                     continue
                 user_ids.append(uid)
             except Exception as e:
@@ -323,19 +337,20 @@ async def get_onboarded_users_without_access() -> list[int]:
     try:
         pool = _get_pool()
         async with pool.acquire() as conn:
-            # Берём всех у кого есть профиль (onboarded=true в jsonb или bool-колонка)
-            # Адаптируй запрос под свою схему если нужно
+            # BUG FIX: exclude users who EVER had a trial or subscription (not just active ones).
+            # The original query only excluded active trials/subscriptions, causing EXPIRED users
+            # to appear in both ONBOARDED and EXPIRED push chains simultaneously.
             rows = await conn.fetch("""
                 SELECT DISTINCT p.user_id
                 FROM profiles p
                 WHERE p.onboarded = TRUE
                   AND NOT EXISTS (
                       SELECT 1 FROM subscriptions s
-                      WHERE s.user_id = p.user_id AND s.expires_at > NOW()
+                      WHERE s.user_id = p.user_id
                   )
                   AND NOT EXISTS (
                       SELECT 1 FROM trials t
-                      WHERE t.user_id = p.user_id AND t.expires_at > NOW()
+                      WHERE t.user_id = p.user_id
                   )
             """)
         result = [r["user_id"] for r in rows]
@@ -457,16 +472,20 @@ async def push_onboarded_user(bot: Bot, user_id: int) -> None:
 
 async def push_expired_user(bot: Bot, user_id: int) -> None:
     """Отправляет следующий пуш в цепочке EXPIRED."""
-    if await was_pushed_today(user_id):
-        return
-
     step = await get_push_step(user_id, "expired")
     if step >= len(EXPIRED_CHAIN):
         return
 
     msg = EXPIRED_CHAIN[step]
 
+    # BUG FIX: Step 0 skips antispam (same pattern as push_onboarded_user).
+    # Previously all steps checked was_pushed_today() first, which could block
+    # the urgent step-0 push if any other push had gone out within 20 hours
+    # (e.g. a trial-warning push sent right before expiry).
     if step > 0:
+        if await was_pushed_today(user_id):
+            return
+
         from db import _get_pool
         now = datetime.now(timezone.utc)
         pool = _get_pool()

@@ -280,24 +280,31 @@ async def grant_subscription(user_id: int, tier: str, days: int,
     now = datetime.now(timezone.utc)
     expires = now + timedelta(days=days)
     async with pool.acquire() as conn:
-        # Upsert: если есть активная — продлеваем от текущей даты истечения
-        existing = await conn.fetchrow(
-            "SELECT expires_at FROM subscriptions WHERE user_id=$1", user_id
-        )
-        if existing and existing["expires_at"] > now:
-            # Продлеваем от текущего expires_at
-            expires = existing["expires_at"] + timedelta(days=days)
+        # BUG FIX: wrap in a transaction with FOR UPDATE to prevent the race condition
+        # where two concurrent webhooks both read the same expires_at and both set
+        # expires = old + days (instead of old + 2*days for the second one).
+        # BUG FIX 2: filter by status='active' — previously a cancelled subscription's
+        # expires_at could be read and extended, leaving the user without access.
+        async with conn.transaction():
+            existing = await conn.fetchrow(
+                "SELECT expires_at FROM subscriptions "
+                "WHERE user_id=$1 AND status='active' AND expires_at > $2 FOR UPDATE",
+                user_id, now
+            )
+            if existing:
+                # Продлеваем от текущего expires_at
+                expires = existing["expires_at"] + timedelta(days=days)
 
-        await conn.execute("""
-            INSERT INTO subscriptions (user_id, tier, status, contract_id, expires_at, updated_at)
-            VALUES ($1, $2, 'active', $3, $4, NOW())
-            ON CONFLICT (user_id) DO UPDATE SET
-                tier=EXCLUDED.tier,
-                status='active',
-                contract_id=EXCLUDED.contract_id,
-                expires_at=EXCLUDED.expires_at,
-                updated_at=NOW()
-        """, user_id, tier, contract_id, expires)
+            await conn.execute("""
+                INSERT INTO subscriptions (user_id, tier, status, contract_id, expires_at, updated_at)
+                VALUES ($1, $2, 'active', $3, $4, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    tier=EXCLUDED.tier,
+                    status='active',
+                    contract_id=EXCLUDED.contract_id,
+                    expires_at=EXCLUDED.expires_at,
+                    updated_at=NOW()
+            """, user_id, tier, contract_id, expires)
     await _invalidate_cache(user_id)
     logger.info(f"Subscription granted: user={user_id} tier={tier} days={days} expires={expires.isoformat()}")
 
@@ -566,14 +573,17 @@ async def lava_webhook_handler(request: web.Request) -> web.Response:
     buyer_id    = body.get("buyer_id", "")
     logger.info(f"Lava webhook: type={event_type} status={status} buyer_id={buyer_id}")
 
-    event_type  = body.get("type", "")
-    status      = body.get("status", "")
-    buyer_id    = body.get("buyer_id", "")
+    # BUG FIX: removed duplicate variable assignments that appeared right after the log line
     contract_id = body.get("contract_id", "") or body.get("parentContractId", "")
     amount      = float(body.get("amount", 0))
     currency    = body.get("currency", "EUR")
-    # Lava не всегда даёт уникальный ID платежа — собираем из контракта + типа + времени
-    payment_id  = body.get("id") or body.get("paymentId") or f"{contract_id}_{event_type}_{int(datetime.now().timestamp())}"
+    # BUG FIX: use a deterministic fallback ID (hash of contract+type) instead of
+    # timestamp-based one. Timestamp fallback could generate the same ID if the webhook
+    # arrived twice within 1 second, defeating the ON CONFLICT deduplication.
+    import hashlib as _hashlib
+    _fallback_src = f"{contract_id}_{event_type}_{buyer_id}"
+    payment_id  = (body.get("id") or body.get("paymentId") or
+                   _hashlib.sha256(_fallback_src.encode()).hexdigest()[:24])
 
     if status != "success":
         logger.info(f"Lava webhook: skip status={status}")

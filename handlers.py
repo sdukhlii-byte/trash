@@ -829,14 +829,14 @@ async def cmd_reset(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await kv_del(user_id, "__model__")
     await kv_del(user_id, "__onboarding__")
 
-    # Сбрасываем push_log для onboarded-цепочки — иначе после сброса
-    # get_push_step вернёт 4 и онбординг-пуши больше никогда не придут
+    # Сбрасываем push_log — иначе после сброса ни онбординг-пуши
+    # ни expired-пуши никогда не придут повторно.
     try:
         from db import _get_pool
         pool = _get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "DELETE FROM push_log WHERE user_id=$1 AND push_type='onboarded'",
+                "DELETE FROM push_log WHERE user_id=$1 AND push_type IN ('onboarded', 'expired')",
                 user_id,
             )
     except Exception as _e:
@@ -1816,7 +1816,9 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         # Высокая уверенность — запускаем агента сразу, без picker-а
         if intent.confidence >= 0.85:
             spec = get_spec(intent.agent) if intent.agent not in ("reels_short", "carousel") else None
-            if intent.agent == "flow_reels_short" or intent.agent == "reels_short":
+            # BUG FIX: removed dead branch `intent.agent == "flow_reels_short"` —
+            # the classifier always returns "reels_short", never "flow_reels_short".
+            if intent.agent == "reels_short":
                 await clear_all_agent_sessions(user_id)
                 await _rs_start(update, user_id)
                 return

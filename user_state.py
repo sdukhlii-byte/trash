@@ -57,6 +57,10 @@ async def _get_user_state_inner(user_id: int) -> UserState:
         p = await get_profile(user_id)
         if not p.get("niche"):
             return UserState.NEW
+        # BUG FIX: has niche but not flagged onboarded (edge case: Redis key loss after restart).
+        # _route_inner already heals this by setting onboarded=True, but the state machine
+        # must not fall through to subscription checks — return ONBOARDED directly.
+        return UserState.ONBOARDED
 
     # 2. Активная подписка
     sub = await get_subscription(user_id)
