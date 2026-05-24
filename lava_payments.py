@@ -547,7 +547,11 @@ async def lava_webhook_handler(request: web.Request) -> web.Response:
     Обрабатывает вебхуки от Lava.top.
     Полностью идемпотентен — дубли игнорируются.
     """
-    if LAVA_WEBHOOK_PASS and not _check_basic_auth(request):
+    # Авторизация обязательна — если пароль не задан, отклоняем все запросы
+    if not LAVA_WEBHOOK_PASS:
+        logger.error("Lava webhook: LAVA_WEBHOOK_PASS не задан — все запросы отклонены")
+        return web.Response(status=503, text="Webhook not configured")
+    if not _check_basic_auth(request):
         logger.warning("Lava webhook: unauthorized")
         return web.Response(status=401, text="Unauthorized")
 
@@ -557,7 +561,10 @@ async def lava_webhook_handler(request: web.Request) -> web.Response:
         logger.error(f"Lava webhook: bad JSON: {e}")
         return web.Response(status=400, text="Bad Request")
 
-    logger.info(f"Lava webhook: {json.dumps(body, ensure_ascii=False)[:600]}")
+    event_type  = body.get("type", "")
+    status      = body.get("status", "")
+    buyer_id    = body.get("buyer_id", "")
+    logger.info(f"Lava webhook: type={event_type} status={status} buyer_id={buyer_id}")
 
     event_type  = body.get("type", "")
     status      = body.get("status", "")

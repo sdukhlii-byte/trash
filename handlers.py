@@ -123,7 +123,7 @@ async def _send_photo(update: Update, filename: str, caption: str, reply_markup=
 # ── keyboards ─────────────────────────────────────────────────────────────────
 
 SUPPORT_USERNAME = "Stanley_Berks"  # без @
-ADMIN_ID = 918966597  # единственный кто может редактировать промпты
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))  # задать в env на Render
 
 _PROMPT_PROTECTION = """
 
@@ -1600,11 +1600,13 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # 1. Онбординг
     onb = await get_onboarding_state(user_id)
     if onb:
-        # Глобальная защита: если у юзера есть активная агент-сессия —
-        # онбординг был открыт случайно (напр. через "Изменить профиль").
+        # Глобальная защита: если у юзера есть активная агент-сессия ИЛИ
+        # история чата — онбординг был открыт случайно (напр. через "Изменить профиль").
         # Сбрасываем онбординг чтобы ответы не перезаписали профиль.
         active_agent = await _detect_active_agent(user_id)
-        if active_agent:
+        model_key = await get_model(user_id)
+        chat_history = await get_history(user_id, model_key, "chat")
+        if active_agent or chat_history:
             await clear_onboarding_state(user_id)
             onb = None
         else:

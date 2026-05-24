@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import registry  # регистрирует все 9 агентов при импорте
 
 from aiohttp import web
@@ -118,7 +119,15 @@ def main() -> None:
         setup_lava_webhook(aio_app, app.bot)
 
         # Telegram webhook endpoint
+        WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+
         async def tg_webhook(request: web.Request) -> web.Response:
+            # Проверяем секретный токен если задан
+            if WEBHOOK_SECRET:
+                token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+                if token != WEBHOOK_SECRET:
+                    logger.warning("tg_webhook: invalid secret token")
+                    return web.Response(status=403, text="Forbidden")
             try:
                 data = await request.json()
                 update = Update.de_json(data, app.bot)
@@ -133,9 +142,10 @@ def main() -> None:
             await app.initialize()
             await post_init(app)  # вызываем вручную — в aiohttp-режиме PTB не зовёт его сам
             await app.bot.set_webhook(
-                url=WEBHOOK_URL,  # WEBHOOK_URL уже содержит /webhook
+                url=WEBHOOK_URL,
                 allowed_updates=Update.ALL_TYPES,
                 drop_pending_updates=True,
+                secret_token=WEBHOOK_SECRET if WEBHOOK_SECRET else None,
             )
             await app.start()
 
