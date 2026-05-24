@@ -43,7 +43,7 @@ register(AgentSpec(
     max_q        = 6,
     accept_photos= True,
     model        = "claude",
-    photo        = "posti13.png",
+    photo        = "6analitika.png",
 ))
 
 
@@ -73,6 +73,7 @@ register(AgentSpec(
     has_pick_step    = True,
     pick_prompt      = "Напиши номер понравившегося захода:",
     max_q            = 5,
+    photo        = "4storis.png",
     model            = "claude",
 ))
 
@@ -137,6 +138,7 @@ register(AgentSpec(
     generator    = "",
     final_prompt = "",
     max_q        = 0,
+    photo        = "2huki.png",
     model        = "claude",
 ))
 
@@ -159,6 +161,7 @@ register(AgentSpec(
     generator    = WARMUP_GENERATOR,
     final_prompt = "Напиши детальный прогрев на 3 дня с конкретными текстами. Используй профиль автора: язык ЦА, их возражения, их боли. Не шаблон — живые тексты.",
     max_q        = 5,
+    photo        = "5progrev.png",
     model        = "claude",
 ))
 
@@ -222,6 +225,7 @@ register(AgentSpec(
     generator    = CARTOON_GENERATOR,
     final_prompt = "Напиши полный сценарий мультика строго по структуре. Персонажи и ситуации — узнаваемые для аудитории из профиля. + 3 идеи для продолжения.",
     max_q        = 4,
+    photo        = "8animati.png",
     model        = "claude",
 ))
 
@@ -242,7 +246,8 @@ register(AgentSpec(
     interviewer  = POST_INTERVIEWER,
     generator    = POST_GENERATOR,
     final_prompt = "Напиши готовый текстовый пост в тоне голоса из профиля автора. Первая строка — под боль/желание ЦА. Только текст — без пояснений.",
-    max_q        = 5,   # FIX: was 3 (=2 actual questions). Now 5 (=4 questions) — most important agent deserves depth.
+    max_q        = 5,
+    photo        = "1napis.png",   # FIX: was 3 (=2 actual questions). Now 5 (=4 questions) — most important agent deserves depth.
     model        = "claude",
 ))
 
