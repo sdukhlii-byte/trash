@@ -109,7 +109,7 @@ async def _is_duplicate(update_id: int) -> bool:
 # ── Webhook server ─────────────────────────────────────────────────────────────
 
 async def _make_webhook_server(ptb_app: Application) -> web.Application:
-    from lava_payments import payment_webhook
+    from lava_payments import lava_webhook_handler as payment_webhook
 
     web_app = web.Application()
 
