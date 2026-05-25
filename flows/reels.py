@@ -226,7 +226,6 @@ async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict
     )
     await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
 
-<<<<<<< HEAD
     # Voice feedback (fatigue guard)
     try:
         from db import get_results as _gr, get_stats as _gs
@@ -240,16 +239,6 @@ async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict
             if should_show_voice_feedback(_total, _gen_count):
                 await send(update, "Звучит как твой голос?",
                            reply_markup=voice_feedback_kb(_recent[0]["id"]))
-=======
-    # Voice feedback
-    try:
-        from db import get_results as _gr
-        _recent = await _gr(user_id, limit=1)
-        if _recent:
-            await asyncio.sleep(0.5)
-            await send(update, "Звучит как твой голос?",
-                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
->>>>>>> 33579b331cb2456105ae3c350396f75f1ccc9b63
     except Exception:
         pass
 
@@ -463,7 +452,6 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
     )
 
     try:
-<<<<<<< HEAD
         from db import get_results as _gr, get_stats as _gs
         from voice_learner import get_voice_stats, should_show_voice_feedback
         _recent = await _gr(user_id, limit=1)
@@ -475,14 +463,6 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
             if should_show_voice_feedback(_total, _gen_count):
                 await send(update, "Звучит как твой голос?",
                            reply_markup=voice_feedback_kb(_recent[0]["id"]))
-=======
-        from db import get_results as _gr
-        _recent = await _gr(user_id, limit=1)
-        if _recent:
-            await asyncio.sleep(0.5)
-            await send(update, "Звучит как твой голос?",
-                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
->>>>>>> 33579b331cb2456105ae3c350396f75f1ccc9b63
     except Exception:
         pass
 
