@@ -125,6 +125,9 @@ async def onb_next(update: Update, user_id: int, state: dict) -> None:
 async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
     profile = {**state.get("data", {}), "onboarded": True}
     await save_profile(user_id, profile)
+    # O(1) инкремент счётчика для social proof на пейволле
+    from ui.paywall import increment_user_count
+    await increment_user_count()
     await clear_onboarding_state(user_id)
     await invalidate_state_cache(user_id)
 

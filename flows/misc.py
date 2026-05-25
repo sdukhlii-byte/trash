@@ -511,10 +511,36 @@ async def daily_menu(update: Update, user_id: int) -> None:
                reply_markup=kb([toggle], ["⏰ Изменить время|daily_set_time"], ["← Меню|menu_main"]))
 
 
-async def daily_send_now(ctx, user_id: int, bot) -> None:
+_DIGEST_CACHE_TTL = 23 * 3600  # 23 часа — чуть меньше суток
+
+
+async def _get_cached_digest(user_id: int) -> str | None:
+    """Читает пре-генерированный дайджест из Redis."""
+    try:
+        from db import kv_get
+        val = await kv_get(user_id, "__daily_digest__")
+        return val if val else None
+    except Exception:
+        return None
+
+
+async def _cache_digest(user_id: int, text: str) -> None:
+    """Кэширует дайджест в Redis на 23 часа."""
+    try:
+        from db import kv_set
+        await kv_set(user_id, "__daily_digest__", text, ttl=_DIGEST_CACHE_TTL)
+    except Exception:
+        pass
+
+
+async def pregen_digest(user_id: int) -> str | None:
+    """
+    Пре-генерирует дайджест и кладёт в Redis.
+    Вызывается из batch-задания в 06:00 UTC — до того как пользователи просыпаются.
+    """
     profile = await get_profile(user_id)
-    today = datetime.date.today().strftime("%d %B")
-    prompt = (
+    today   = datetime.date.today().strftime("%d %B")
+    prompt  = (
         f"Ниша: {profile.get('niche', 'эксперт')}\n"
         f"Аудитория: {profile.get('audience', 'не указана')}\n"
         f"Тон: {profile.get('tone', 'дружелюбный')}\n"
@@ -522,6 +548,32 @@ async def daily_send_now(ctx, user_id: int, bot) -> None:
     )
     try:
         result = await complete(DAILY_DIGEST_SYSTEM, prompt, temperature=0.85)
+        if result and result.strip():
+            await _cache_digest(user_id, result)
+            return result
+    except Exception as e:
+        logger.error(f"[daily pregen] user={user_id}: {e}")
+    return None
+
+
+async def daily_send_now(ctx, user_id: int, bot) -> None:
+    """
+    Отправляет дайджест пользователю.
+    Сначала проверяет кэш (пре-генерация батча в 06:00 UTC).
+    Если кэша нет — генерирует на лету (fallback).
+    """
+    result = await _get_cached_digest(user_id)
+
+    if not result:
+        # Fallback: генерация на лету если батч не успел
+        logger.info(f"[daily] cache miss for {user_id}, generating on-demand")
+        result = await pregen_digest(user_id)
+
+    if not result:
+        logger.error(f"[daily] no digest for {user_id}")
+        return
+
+    try:
         await bot.send_message(chat_id=user_id, text=result, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"[daily] send error for {user_id}: {e}")

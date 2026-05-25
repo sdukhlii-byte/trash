@@ -62,17 +62,27 @@ async def _send_photo(update: Update, filename: str,
     return False
 
 
-async def _get_social_proof() -> str:
-    """Возвращает строку с числом активных пользователей для social proof."""
+_SOCIAL_PROOF_KEY = "global:user_count"
+
+
+async def increment_user_count() -> None:
+    """Вызывается при сохранении профиля — инкремент O(1)."""
     try:
         from db import get_redis
         r = await get_redis()
-        # Считаем ключи active subscription + trial в Redis
-        count = 0
-        async for _ in r.scan_iter("bot:kv:*:__profile__"):
-            count += 1
+        await r.incr(_SOCIAL_PROOF_KEY)
+    except Exception:
+        pass
+
+
+async def _get_social_proof() -> str:
+    """Возвращает строку social proof. O(1) — один GET из Redis."""
+    try:
+        from db import get_redis
+        r = await get_redis()
+        val = await r.get(_SOCIAL_PROOF_KEY)
+        count = int(val) if val else 0
         if count > 20:
-            # Округляем до десяток — выглядит честнее
             rounded = (count // 10) * 10
             return f"\n\n_{rounded}+ экспертов уже создают контент с Мирой._"
     except Exception:

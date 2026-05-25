@@ -171,6 +171,14 @@ async def main() -> None:
     # 2. База данных
     await init_db()
 
+    # 2b. Миграции схемы — применяем новые SQL-файлы из migrations/sql/
+    try:
+        from migrations.runner import run as run_migrations
+        await run_migrations()
+    except Exception as e:
+        logger.error(f"Migration failed: {e}")
+        raise  # не стартуем с непримененными миграциями — безопаснее
+
     # 3. Регистрируем всех агентов (ОБЯЗАТЕЛЬНО до build_app)
     import registry  # noqa: F401 — side-effect import, заполняет _REGISTRY
     logger.info(f"Agents registered: {len(__import__('agents')._REGISTRY)}")
@@ -223,6 +231,48 @@ async def main() -> None:
         logger.info("Hourly conversion job scheduled")
     except Exception as e:
         logger.warning(f"Hourly conversion job failed: {e}")
+
+    # 6c. Batch pre-generation дайджестов в 06:00 UTC
+    # Генерирует дайджест для всех подписчиков у которых включён daily
+    # До того как они просыпаются — к моменту доставки уже готово из кэша
+    try:
+        import datetime as _dt
+
+        async def _batch_pregen_digests(ctx) -> None:
+            from db import _get_pool, kv_get
+            from flows.misc import pregen_digest
+            import asyncio as _aio
+            logger.info("[daily batch] starting pre-generation")
+            pool = _get_pool()
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT DISTINCT user_id FROM daily_settings WHERE enabled=true"
+                    )
+                user_ids = [r["user_id"] for r in rows]
+            except Exception as e:
+                logger.error(f"[daily batch] fetch users failed: {e}")
+                return
+
+            # Генерируем по 5 параллельно — не перегружаем семафор
+            sem = _aio.Semaphore(5)
+            async def _pregen_one(uid: int):
+                async with sem:
+                    await pregen_digest(uid)
+                    await _aio.sleep(0.5)  # мягкий rate-limit
+
+            await _aio.gather(*[_pregen_one(uid) for uid in user_ids],
+                              return_exceptions=True)
+            logger.info(f"[daily batch] pre-generated {len(user_ids)} digests")
+
+        ptb_app.job_queue.run_daily(
+            callback=_batch_pregen_digests,
+            time=_dt.time(hour=6, minute=0, tzinfo=_dt.timezone.utc),
+            name="daily_digest_batch",
+        )
+        logger.info("Daily digest batch job scheduled at 06:00 UTC")
+    except Exception as e:
+        logger.warning(f"Daily digest batch job failed: {e}")
 
     # Follow-up jobs — не восстанавливаем при рестарте (TTL 72h, Railway перезапускается редко)
     # Новые followup планируются при каждом save_result() через ptb_app
