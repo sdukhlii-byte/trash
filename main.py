@@ -136,7 +136,9 @@ async def _make_webhook_server(ptb_app: Application) -> web.Application:
         return web.Response(status=200)
 
     web_app.router.add_post("/tg", tg_webhook)
+    web_app.router.add_post("/webhook/tg", tg_webhook)   # alias — если WEBHOOK_URL включает /webhook
     web_app.router.add_post("/payment", payment_webhook)
+    web_app.router.add_post("/lava/webhook", payment_webhook)  # alias из lava setup
     web_app.router.add_get("/health", lambda r: web.Response(text="ok"))
 
     return web_app
@@ -194,8 +196,8 @@ async def main() -> None:
 
     # 4. Retention push — запускаем фоновый job
     try:
-        from retention import schedule_retention_push
-        await schedule_retention_push(ptb_app)
+        from retention import setup_retention_jobs
+        setup_retention_jobs(ptb_app)
         logger.info("Retention push scheduled")
     except Exception as e:
         logger.warning(f"Retention push schedule failed: {e}")
