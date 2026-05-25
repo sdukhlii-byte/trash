@@ -116,10 +116,14 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             await edit(query, "❌ Ссылка на оплату не настроена. Обратись к администратору.",
                        reply_markup=kb(["← Назад|sub_cabinet"]))
             return
+        from lava_payments import TIER_PRICES_EUR
+        p = TIER_PRICES_EUR
         await edit(query,
-                   "💳 *Оформление подписки*\n\n"
-                   "• 1 месяц — €31\n• 3 месяца — €117 _(скидка 6%)_\n"
-                   "• 6 месяцев — €234 _(скидка 10%)_\n• 12 месяцев — €468 _(скидка 13%)_\n\n"
+                   f"💳 *Оформление подписки*\n\n"
+                   f"• 1 месяц — €{p['1m']}\n"
+                   f"• 3 месяца — €{p['3m']} _(скидка 7%)_\n"
+                   f"• 6 месяцев — €{p['6m']} _(скидка 10%)_\n"
+                   f"• 12 месяцев — €{p['12m']} _(скидка 13%)_\n\n"
                    "_После оплаты доступ активируется автоматически_ ✅",
                    parse_mode="Markdown",
                    reply_markup=InlineKeyboardMarkup([
@@ -825,7 +829,6 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             from voice_learner import handle_voice_feedback_yes
             await handle_voice_feedback_yes(update, user_id, result_id)
         except Exception as e:
-            from utils import send
             await send(update, "✅ Записала!", reply_markup=kb(["← Меню|menu_main"]))
         return
 

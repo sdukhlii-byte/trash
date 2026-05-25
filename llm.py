@@ -307,21 +307,18 @@ async def generate_with_progress(
     system: str,
     history: list,
     final_prompt: str,
-    status_msg,          # telegram Message объект — будем редактировать его текст
+    status_msg,
     model_key: str = DEFAULT_MODEL,
     temperature: float = 0.85,
     presence_penalty: float = 0.3,
+    agent_key: str = "default",
 ) -> str:
     """
-    Генерация с промежуточными статусными апдейтами.
-
-    Через 20с и 50с после начала генерации редактирует status_msg
-    чтобы пользователь видел прогресс, а не думал что бот завис.
-
-    Это не стриминг (требует SSE), но создаёт ощущение живого процесса
-    при генерациях от 60 до 180 секунд.
+    Генерация с анимированными статусными апдейтами.
+    agent_key используется для подбора контекстных статус-фраз.
     """
-    import random
+    from ui.progress_bar import gen_status_messages
+    progress_msgs = gen_status_messages(agent_key)
 
     result_container: list = [None]
     error_container:  list = [None]
@@ -340,16 +337,13 @@ async def generate_with_progress(
 
     gen_task = asyncio.create_task(_do_generate())
 
-    # Промежуточные апдейты
-    progress_msgs = random.sample(_PROGRESS_MSGS, min(2, len(_PROGRESS_MSGS)))
-    checkpoints   = [20, 50]  # секунды
-
+    # Анимированные апдейты: 0с → 20с → 50с → 90с
+    checkpoints = [20, 50, 90]
     for i, delay in enumerate(checkpoints):
         try:
-            await asyncio.wait_for(asyncio.shield(gen_task), timeout=delay)
-            break  # завершилась раньше checkpoint — выходим
+            await asyncio.wait_for(asyncio.shield(gen_task), timeout=delay if i == 0 else delay - checkpoints[i-1])
+            break
         except asyncio.TimeoutError:
-            # Ещё генерируется — обновляем статус
             if i < len(progress_msgs):
                 try:
                     await status_msg.edit_text(progress_msgs[i])
@@ -358,7 +352,6 @@ async def generate_with_progress(
         except Exception:
             break
 
-    # Дожидаемся финала если ещё не готово
     if not gen_task.done():
         await gen_task
 

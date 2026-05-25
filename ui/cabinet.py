@@ -32,6 +32,29 @@ async def show_cabinet(update: Update, user_id: int) -> None:
     examples = await get_style_examples(user_id)
     ex_count = len(examples)
 
+    # Голос Миры — полный прогресс-бар
+    from voice_learner import get_voice_stats
+    from ui.progress_bar import voice_progress, trial_urgency
+    try:
+        vs = await get_voice_stats(user_id)
+        voice_line = f"\n\n{voice_progress(vs.get('total_signals', 0))}"
+    except Exception:
+        voice_line = ""
+
+    # Таймер триала если нужно
+    trial_line = ""
+    if state_obj == UserState.TRIAL:
+        try:
+            from lava_payments import get_trial
+            from datetime import datetime, timezone
+            t = await get_trial(user_id)
+            if t:
+                exp = datetime.fromisoformat(t["expires_at"])
+                hours_left = (exp - datetime.now(timezone.utc)).total_seconds() / 3600
+                trial_line = f"\n\n{trial_urgency(hours_left)}"
+        except Exception:
+            pass
+
     profile_line = (
         f"\n\n*Профиль:*\n"
         f"Ниша: {profile_val(p, 'niche')}\n"
@@ -62,7 +85,7 @@ async def show_cabinet(update: Update, user_id: int) -> None:
 
     await send(
         update,
-        f"⚙️ *Кабинет*\n\n{status_text}{profile_line}",
+        f"⚙️ *Кабинет*\n\n{status_text}{trial_line}{profile_line}{voice_line}",
         parse_mode="Markdown",
         reply_markup=kb(*rows),
     )

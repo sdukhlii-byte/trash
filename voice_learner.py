@@ -184,17 +184,17 @@ async def handle_voice_feedback_yes(
     stats = await get_voice_stats(user_id)
     total = stats["total_signals"]
 
+    from ui.progress_bar import voice_progress_short
+    hint = voice_progress_short(total)
+
     if total >= 10:
-        msg = f"✅ Записала — голос уже очень точный ({total} сигналов). Тексты становятся лучше с каждой оценкой. 🎯"
+        msg = f"✅ Записала — голос на уровне «Точный» ({total} сигналов). 🎯{hint}"
     elif total >= 5:
-        filled = "▓" * 5
-        msg = f"✅ Записала этот стиль.\n\n_Голос Миры: [{filled}] прокачан ({total} сигналов) — попадание в твой голос стабильное._"
+        msg = f"✅ Записала этот стиль.{hint}"
     elif total >= 2:
-        filled = "▓" * total
-        empty  = "░" * (5 - total)
-        msg = f"✅ Записала.\n\n_Голос Миры: [{filled}{empty}] {total}/5 — ещё {5 - total} одобрения и начну попадать стабильно._"
+        msg = f"✅ Записала.{hint}"
     else:
-        msg = "✅ Записала твой голос. Чем больше оценишь — тем точнее буду попадать в стиль."
+        msg = f"✅ Записала твой голос.{hint}"
 
     await send(update, msg, parse_mode="Markdown",
                reply_markup=kb(["← Меню|menu_main"]))
@@ -238,12 +238,8 @@ async def handle_voice_note_text(
     stats = await get_voice_stats(user_id)
     total = stats["total_signals"]
 
-    if total < 5:
-        filled = "▓" * total
-        empty  = "░" * (5 - total)
-        progress = f"\n\n_Голос Миры: [{filled}{empty}] {total}/5_"
-    else:
-        progress = f"\n\n_Голос Миры: прокачан ({total} сигналов) 🎯_"
+    from ui.progress_bar import voice_progress_short
+    progress = voice_progress_short(total)
 
     await send(
         update,

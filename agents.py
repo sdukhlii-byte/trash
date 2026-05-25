@@ -350,6 +350,7 @@ async def _gen_variants(update: Update, user_id: int,
             model_key=spec.model,
             temperature=0.85,
             presence_penalty=0.3,
+            agent_key=spec.key,
         )
     except Exception as e:
         logger.error(f"[{spec.key}] gen_variants error: {e}")
@@ -456,6 +457,7 @@ async def generate(update: Update, user_id: int,
                 model_key=spec.model,
                 temperature=0.85,
                 presence_penalty=0.3,
+                agent_key=spec.key,
             )
     except Exception as e:
         logger.error(f"[{spec.key}] generate error: {e}")
