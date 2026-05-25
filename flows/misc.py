@@ -82,6 +82,18 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
         parse_mode="Markdown",
         reply_markup=kb(["🔄 Ещё 10 идей|quick_ideas", "← Меню|menu_main"]),
     )
+    # Voice feedback — узнаём звучит ли как автор
+    try:
+        import asyncio
+        from db import get_results as _gr
+        from voice_learner import voice_feedback_kb
+        _recent = await _gr(user_id, limit=1)
+        if _recent:
+            await asyncio.sleep(0.5)
+            await send(update, "Звучит как твой голос?",
+                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -144,6 +156,17 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
             ["← Меню|menu_main"],
         ),
     )
+    try:
+        import asyncio
+        from db import get_results as _gr
+        from voice_learner import voice_feedback_kb
+        _recent = await _gr(user_id, limit=1)
+        if _recent:
+            await asyncio.sleep(0.5)
+            await send(update, "Звучит как твой голос?",
+                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+    except Exception:
+        pass
 
 
 async def regen_last(update: Update, user_id: int) -> None:
@@ -186,6 +209,17 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
             ["← Меню|menu_main"],
         ),
     )
+    try:
+        import asyncio
+        from db import get_results as _gr
+        from voice_learner import voice_feedback_kb
+        _recent = await _gr(user_id, limit=1)
+        if _recent:
+            await asyncio.sleep(0.5)
+            await send(update, "Звучит как твой голос?",
+                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -276,7 +310,7 @@ async def show_stats(update: Update, user_id: int) -> None:
 
         # Voice calibration
         if voice_sig == 0:
-            lines.append("🎤 Голос Миры: _не настроен_ — оцени результат кнопкой «звучит как я»")
+            lines.append("🎤 Голос Миры: _не настроен_ — после генерации появится кнопка оценки")
         elif voice_sig < 5:
             bar = "▓" * voice_sig + "░" * (5 - voice_sig)
             lines.append(f"🎤 Голос Миры: [{bar}] {voice_sig}/5")

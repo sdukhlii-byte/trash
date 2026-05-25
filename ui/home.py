@@ -115,7 +115,7 @@ async def show_home(update: Update, user_id: int) -> None:
 
         # Состояние голоса
         if voice_sig == 0:
-            lines.append("🎤 Голос Миры: _ещё не настроен_ — оцени первый результат")
+            lines.append("🎤 Голос Миры: _не настроен_ — после генерации оцени результат")
         elif voice_sig < 3:
             lines.append(f"🎤 Голос Миры: _настраивается_ ({voice_sig}/5 сигналов)")
         elif voice_sig < 7:
@@ -156,7 +156,7 @@ def _home_kb(total: int, voice_signals: int):
 
     # Если голос не настроен — первой кнопкой ставим Style
     if voice_signals < 3:
-        rows.insert(0, ["🎤 Настроить мой голос|style_menu"])
+        rows.insert(0, ["🎤 Голос Миры: оцени результат|my_results"])
 
     rows += [
         ["📚 Мои материалы|my_results",           "📈 Прогресс|my_stats"],
