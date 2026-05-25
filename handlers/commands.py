@@ -66,6 +66,34 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception:
                 pass
 
+        # Закреплённое вводное сообщение — отправляем и закрепляем один раз
+        _PINNED_INTRO = (
+            "Привет, я Мира 👋\n\n"
+            "Я не просто генерирую тексты — *я учусь писать как ты.*\n\n"
+            "Вот что я умею:\n"
+            "🎙 *Посты* — под твою нишу и аудиторию\n"
+            "🎬 *Рилсы и сторис* — сценарии и тексты\n"
+            "🎠 *Карусели* — структура + все слайды\n"
+            "🔥 *Прогревы* — серии, которые продают\n"
+            "📅 *Контент-план* — на неделю или месяц\n\n"
+            "Как я становлюсь точнее: после каждого текста ты нажимаешь "
+            "«Звучит как я ✅» или «Не совсем ✏️» — и я запоминаю твой стиль. "
+            "Через 5–7 оценок правок становится в разы меньше.\n\n"
+            "Начни прямо сейчас — напиши тему поста или нажми кнопку 👇"
+        )
+        try:
+            pinned_msg = await update.effective_chat.send_message(
+                _PINNED_INTRO,
+                parse_mode="Markdown",
+            )
+            await update.effective_chat.pin_message(
+                pinned_msg.message_id,
+                disable_notification=True,
+            )
+            await kv_set(user_id, "__pinned_intro_id__", str(pinned_msg.message_id))
+        except Exception as e:
+            logger.warning(f"cmd_start: could not send/pin intro for {user_id}: {e}")
+
         # Живое первое сообщение с приветствием по времени суток
         from ui.mira_voice import greet
         greeting = greet(first_name)
