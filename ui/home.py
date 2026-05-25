@@ -156,7 +156,7 @@ def _home_kb(total: int, voice_signals: int):
 
     # Если голос не настроен — первой кнопкой ставим Style
     if voice_signals < 3:
-        rows.insert(0, ["🎤 Голос Миры: оцени результат|my_results"])
+        rows.insert(0, ["🎤 Настроить мой голос|style_menu"])
 
     rows += [
         ["📚 Мои материалы|my_results",           "📈 Прогресс|my_stats"],
