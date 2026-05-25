@@ -122,7 +122,7 @@ async def show_home(update: Update, user_id: int) -> None:
 
         # Голос — цветной бар
         if voice_sig == 0:
-            lines.append("🎤 Голос Миры: 🤍🤍🤍🤍🤍 _оцени результат — начну запоминать_")
+            lines.append("🎤 Голос Миры: 🤍🤍🤍🤍🤍 _оцени результат или добавь примеры своих постов — начну запоминать_")
         elif voice_sig < 5:
             bar = _bar(voice_sig, 5, "pink", width=5)
             lines.append(f"🎤 Голос Миры: {bar} {voice_sig}/5 — настраивается")

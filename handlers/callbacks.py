@@ -117,6 +117,7 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     if data == "sub_pay":
         link = get_payment_link(user_id)
         if not link:
+            logger.error(f"sub_pay: payment link empty for user={user_id}, LAVA_LINK={os.environ.get('LAVA_LINK')!r}")
             await edit(query, "❌ Ссылка на оплату не настроена. Обратись к администратору.",
                        reply_markup=kb(["← Назад|sub_cabinet"]))
             return
@@ -144,9 +145,12 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
     if data == "cab_referral":
         ref_text, ref_link = await render_referral(user_id)
+        import urllib.parse as _up
+        _share_text = _up.quote("Попробуй Миру — 7 дней бесплатно! Создаёт посты, рилсы и прогревы в твоём голосе 🔥")
+        _share_url  = f"https://t.me/share/url?url={_up.quote(ref_link)}&text={_share_text}"
         await edit(query, ref_text, parse_mode="Markdown",
                    reply_markup=InlineKeyboardMarkup([
-                       [InlineKeyboardButton("📤 Поделиться ссылкой", switch_inline_query=ref_link)],
+                       [InlineKeyboardButton("📤 Поделиться ссылкой", url=_share_url)],
                        [InlineKeyboardButton("← Кабинет", callback_data="sub_cabinet")],
                    ]))
         return
@@ -196,7 +200,15 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     if data == "mode_chat":
         await clear_all_agent_sessions(user_id)
         await clear_onboarding_state(user_id)
-        await edit(query, "💬 *Спроси Миру*\n\nПиши — отвечу.", parse_mode="Markdown",
+        await kv_set(user_id, "__chat_mode__", "ask_mira", ttl=3600)
+        import random as _rnd
+        _chat_prompts = [
+            "💬 Слушаю — что хочешь обсудить?",
+            "💬 Говори — я здесь.",
+            "💬 Пиши всё что в голове — разберёмся вместе.",
+            "💬 Что на уме? Разберём вместе.",
+        ]
+        await edit(query, _rnd.choice(_chat_prompts),
                    reply_markup=kb(["← Меню|menu_main"]))
         return
 

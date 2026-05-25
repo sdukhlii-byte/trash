@@ -338,10 +338,6 @@ async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                        user_id: int, text: str) -> None:
 
-    # 0. Voice note feedback (ответ на "не совсем" в voice feedback)
-    if await handle_voice_note_text(update, user_id, text):
-        return
-
     # 1. Онбординг — проверяем Redis-флаг ПЕРВЫМ, до любых Postgres-запросов
     onb = await get_onboarding_state(user_id)
     if onb:
@@ -458,6 +454,11 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if pe_s and pe_s.get("step") == "await_text":
         if user_id == ADMIN_ID:
             await pe_save_text(update, user_id, text, pe_s)
+        return
+
+    # 2g. Voice note feedback — ПОСЛЕ всех активных сессий агентов.
+    # Иначе перехватывает текст доработки/рефайна пока активен _FEEDBACK_STEP_KEY.
+    if await handle_voice_note_text(update, user_id, text):
         return
 
     # 3. Рилс-коротышка
@@ -579,6 +580,16 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     history   = await get_history(user_id, model_key, "chat")
     _chat_base = CHAT_SYSTEM + build_profile_ctx(profile)
     _chat_base_with_ctx = await __import__("chat_context").build_chat_system(_chat_base, user_id)
+
+    # Если юзер открыл "Спроси Миру" — добавляем тёплый persona-суффикс
+    _chat_mode = await kv_get(user_id, "__chat_mode__")
+    if _chat_mode == "ask_mira":
+        _chat_base_with_ctx += (
+            "\n\nСейчас пользователь задаёт вопрос напрямую через «Спроси Миру». "
+            "Отвечай тепло и развёрнуто — как близкая подруга которая разбирается в теме. "
+            "Не обрывай мысль. Если тема требует уточнения — задай один вопрос в конце."
+        )
+
     system    = protect(user_id, await get_prompt(user_id, "chat", _chat_base_with_ctx))
     history.append({"role": "user", "content": text})
 
