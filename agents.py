@@ -666,12 +666,6 @@ async def _send_result(update: Update, result: str,
             result_id = await save_result(user_id, spec.key, spec.name, result)
         except Exception as e:
             logger.warning(f"Could not save result: {e}")
-        # Обновляем стрик здесь (не в db.py — там circular import)
-        try:
-            from ui.home import update_streak_on_result
-            await update_streak_on_result(user_id)
-        except Exception:
-            pass
 
     if spec.as_file:
         fname    = f"{spec.file_prefix}_{user_id}.txt"
@@ -714,13 +708,14 @@ async def _send_result(update: Update, result: str,
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
-    # GIF при первой генерации
+    # Стикер/GIF при первой генерации
     try:
         from db import get_stats
-        from ui.media import send_gif
+        from ui.media import send_gif, send_sticker
         _stats = await get_stats(user_id)
         if _stats.get("total", 0) == 1:
-            await send_gif(update, "first_generation")
+            if not await send_sticker(update, "done"):
+                await send_gif(update, "first_generation")
     except Exception:
         pass
 

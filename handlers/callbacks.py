@@ -89,10 +89,12 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                 "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
                 "Напиши тему поста или нажми меню 👇"
             )
-            # GIF-анимация — если файл есть, показываем вместо текста
-            from ui.media import send_gif
-            sent_gif = await send_gif(update, "trial_activated", caption)
-            if not sent_gif:
+            from ui.media import send_gif, send_sticker
+            # Стикер → GIF → текст (первое что сработает)
+            sent = await send_sticker(update, "trial_welcome")
+            if not sent:
+                sent = await send_gif(update, "trial_activated", caption)
+            if not sent:
                 await send(update, caption, parse_mode="Markdown",
                            reply_markup=kb(["☰ Главное меню|menu_main"]))
         except ValueError:
@@ -830,11 +832,12 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             # Level-up GIF если достигли уровня
             try:
                 from voice_learner import get_voice_stats
-                from ui.media import send_gif
+                from ui.media import send_gif, send_sticker
                 _vs = await get_voice_stats(user_id)
                 _total = _vs.get("total_signals", 0)
                 if _total in (5, 10, 20):  # точки level-up
-                    await send_gif(update, "voice_level_up")
+                    if not await send_sticker(update, "level_up"):
+                        await send_gif(update, "voice_level_up")
             except Exception:
                 pass
         except Exception as e:

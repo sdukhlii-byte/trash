@@ -746,26 +746,35 @@ async def _notify_user(bot: Bot, user_id: int, tier: str, event_type: str) -> No
     ]])
     try:
         await invalidate_state_cache(user_id)
-        # Пробуем отправить GIF — если файла нет, падаем на текст
-        _gif_sent = False
+
+        # Создаём фиктивный update-like объект для send_visual
+        class _FakeChat:
+            def __init__(self, b, uid):
+                self._bot = b
+                self._id  = uid
+            async def send_animation(self, **kw):
+                return await self._bot.send_animation(chat_id=self._id, **kw)
+            async def send_sticker(self, **kw):
+                return await self._bot.send_sticker(chat_id=self._id, **kw)
+
+        class _FakeUpdate:
+            def __init__(self, b, uid):
+                self.effective_chat = _FakeChat(b, uid)
+
+        _fake = _FakeUpdate(bot, user_id)
+        _visual_sent = False
+
+        # Стикер → GIF → текст
         try:
-            import os as _os
-            from ui.media import _ASSETS_DIR, _GIFS
-            _gif_path = _os.path.join(_ASSETS_DIR, _GIFS.get("subscription_paid", ""))
-            if _os.path.exists(_gif_path):
-                with open(_gif_path, "rb") as _f:
-                    await bot.send_animation(
-                        chat_id=user_id,
-                        animation=_f,
-                        caption=text,
-                        parse_mode="Markdown",
-                        reply_markup=_post_pay_kb,
-                    )
-                _gif_sent = True
+            from ui.media import send_sticker as _ss, send_gif as _sg, _GIF_URLS
+            if await _ss(_fake, "trial_welcome"):
+                _visual_sent = True
+            elif await _sg(_fake, "subscription_paid", text):
+                _visual_sent = True
         except Exception:
             pass
 
-        if not _gif_sent:
+        if not _visual_sent:
             await bot.send_message(
                 chat_id=user_id,
                 text=text,
