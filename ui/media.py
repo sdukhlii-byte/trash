@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 # ПОКА URL НЕ ЗАПОЛНЕНЫ — бот тихо пропускает GIF (graceful degradation)
 
 _GIF_URLS: dict[str, str] = {
-    # "trial_activated":   "https://i.ibb.co/XXXXX/trial.gif",
-    # "first_generation":  "https://i.ibb.co/XXXXX/first.gif",
-    # "voice_level_up":    "https://i.ibb.co/XXXXX/levelup.gif",
-    # "subscription_paid": "https://i.ibb.co/XXXXX/paid.gif",
-    # "streak_7":          "https://i.ibb.co/XXXXX/streak.gif",
+    "trial_activated":   "https://i.ibb.co/n8qtKcf8/trial-activated.gif",
+    "first_generation":  "https://i.ibb.co/HDtzRXcS/Not-Bad-Pop-Tv-GIF-by-Schitt-s-Creek.gif",
+    "voice_level_up":    "https://i.ibb.co/xthRszmr/voice-level-up.gif",
+    "subscription_paid": "https://i.ibb.co/ynyf4J93/subscription-paid.gif",
+    "streak_7":          "https://i.ibb.co/mCTcYmkq/streak-7.gif",
 }
 
 # Fallback: локальные файлы если есть (для тестов)
