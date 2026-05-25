@@ -44,6 +44,73 @@ _AGENT_PROMPT_SLUGS: dict[str, tuple[str, str]] = {
 
 _DONE_SIGNAL = "[ready]"
 
+# ── Панель доработки (как в carousel.py) ─────────────────────────────────────
+
+# Инструкции правок — под разные типы контента
+_AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
+    # Универсальные (для всех агентов)
+    "_default": {
+        "softer":     "Перепиши в более мягком и поддерживающем тоне. Убери давление. Сохрани структуру.",
+        "bolder":     "Сделай текст смелее и провокационнее: прямые утверждения, без воды. Сохрани структуру.",
+        "shorter":    "Сократи на 30%: убери воду, оставь только главное. Сохрани ключевые идеи.",
+        "add_detail": "Добавь одну конкретную деталь, историю или цифру — в самом сильном месте текста.",
+        "stronger_cta": "Усиль призыв к действию в конце: сделай его конкретным и неотразимым.",
+    },
+    # Специфика для разных агентов
+    "post": {
+        "softer":       "Перепиши пост в более тёплом тоне — поддерживающий, без давления. Сохрани хук.",
+        "bolder":       "Сделай пост провокационнее: острый хук, неудобная правда, прямые утверждения.",
+        "shorter":      "Сократи пост до 150 слов: только хук + суть + CTA. Никакой воды.",
+        "add_detail":   "Добавь личную историю или конкретный кейс — одним абзацем в середине поста.",
+        "stronger_cta": "Перепиши последний абзац: сделай CTA конкретным, с выгодой для читателя.",
+    },
+    "warmup": {
+        "softer":       "Смягчи тон серии: убери ощущение продажи, добавь заботу и поддержку.",
+        "bolder":       "Усиль прогрев: добавь больше конфликта, боли аудитории, ощущения срочности.",
+        "shorter":      "Сократи каждый пост серии до 100-150 слов. Оставь только суть.",
+        "add_detail":   "Добавь социальное доказательство — историю клиента или кейс — в самый слабый пост серии.",
+        "stronger_cta": "Усиль финальный призыв в последнем посте серии.",
+    },
+    "stories": {
+        "softer":       "Перепиши сторис в более живом и неформальном стиле — как разговор с подругой.",
+        "bolder":       "Сделай сторис интереснее: добавь интригу, недосказанность, провокационный вопрос.",
+        "shorter":      "Сократи каждый слайд до 1-2 предложений. Читается за 2 секунды.",
+        "add_detail":   "Добавь один слайд с конкретным фактом или цифрой — в середину цепочки.",
+        "stronger_cta": "Усиль последний слайд: конкретный призыв с выгодой.",
+    },
+    "tg_plan": {
+        "softer":       "Смягчи формулировки тем: более живые, разговорные заголовки.",
+        "bolder":       "Усиль темы: более провокационные, цепляющие заголовки для каждого поста.",
+        "shorter":      "Оставь 5 лучших тем недели. Убери слабые.",
+        "add_detail":   "К каждой теме добавь первую фразу поста — чтобы сразу можно было писать.",
+        "stronger_cta": "К каждой теме добавь конкретный призыв к действию.",
+    },
+    "talking_head": {
+        "softer":       "Перепиши сценарий в более личном, разговорном тоне. Как будто говоришь другу.",
+        "bolder":       "Сделай сценарий провокационнее: острый вход, прямые утверждения, сильный финал.",
+        "shorter":      "Сократи сценарий до 60 секунд: убери лирику, оставь суть.",
+        "add_detail":   "Добавь личную историю или конкретный пример в середину сценария.",
+        "stronger_cta": "Усиль финальный призыв: конкретный следующий шаг для зрителя.",
+    },
+}
+
+
+def _get_agent_refine_prompts(agent_key: str) -> dict[str, str]:
+    """Возвращает промпты правок для конкретного агента (с fallback на дефолт)."""
+    return _AGENT_REFINE_PROMPTS.get(agent_key, _AGENT_REFINE_PROMPTS["_default"])
+
+
+def _agent_edit_panel_kb(spec_key: str) -> object:
+    """Панель доработки после генерации — как в карусели."""
+    from utils import kb as _kb
+    return _kb(
+        ["🎨 Мягче|ag_edit_softer",           "🔥 Жёстче|ag_edit_bolder"],
+        ["✂️ Сократить|ag_edit_shorter",       "➕ Добавить деталь|ag_edit_detail"],
+        ["💪 Усилить CTA|ag_edit_cta"],
+        ["✏️ Доработать свободно|refine_last",  "🔄 Другой вариант|regen_last"],
+        [f"🔁 Заново|agent_restart_{spec_key}", "← Меню|menu_main"],
+    )
+
 # Статусные сообщения с голосом Миры
 _STATUS_THINKING = [
     "Записала — думаю над первым вопросом...",
@@ -661,25 +728,25 @@ async def _send_result(update: Update, result: str,
 
 
 async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
-    """После результата — кнопки действий + voice feedback + upsell + проактив."""
-    # Получаем ID последнего результата для voice feedback
-    from db import get_results
+    """После результата — панель доработки (как в carousel.py) + voice feedback + upsell + проактив."""
+    from db import get_results, kv_set
     _result_id = 0
     try:
         _recent = await get_results(user_id, limit=1)
         if _recent:
             _result_id = _recent[0]["id"]
+            # Сохраняем last_result в сессии агента для панели правок
+            _content = _recent[0].get("content", "")
+            if _content:
+                try:
+                    _s = await get_agent_session(user_id, spec.key) or {}
+                    _s["last_result"] = _content
+                    _s["spec_key"]    = spec.key
+                    await save_agent_session(user_id, f"__ag_edit_{spec.key}__", _s)
+                except Exception:
+                    pass
     except Exception:
         pass
-
-    await send(
-        update,
-        "Что дальше?",
-        reply_markup=kb(
-            ["✏️ Доработать|refine_last",          "🔄 Другой вариант|regen_last"],
-            [f"🔁 Ещё раз|agent_restart_{spec.key}", "📚 Сохранённые|my_results"],
-        ),
-    )
 
     # Стрик
     try:
@@ -688,15 +755,16 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     except Exception:
         pass
 
-    # Кнопка голосового фидбека с прогресс-баром — ключевой differentiator
+    # Панель доработки — пользователь видит конкретные ручки, не абстрактное «доработать»
+    await send(update, "Докрути под себя 👇", reply_markup=_agent_edit_panel_kb(spec.key))
+
+    # Voice feedback с прогресс-баром
     if _result_id:
-        import asyncio
         await asyncio.sleep(0.5)
-        # Прогресс-бар голоса через единую библиотеку
         try:
             from voice_learner import get_voice_stats
             from ui.progress_bar import voice_progress_short
-            _vs = await get_voice_stats(user_id)
+            _vs    = await get_voice_stats(user_id)
             _total = _vs.get("total_signals", 0)
             _voice_hint = voice_progress_short(_total)
         except Exception:
@@ -709,10 +777,112 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
             reply_markup=voice_feedback_kb(_result_id),
         )
 
-    # Мягкий upsell для триал-пользователей
     from ui.cabinet import maybe_show_upsell
     await maybe_show_upsell(update, user_id)
 
-    # Проактивный следующий шаг
     from flows.proactive import maybe_suggest_next
     await maybe_suggest_next(update, user_id, spec.key, delay=1.5)
+
+
+async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
+    """
+    Универсальный обработчик правок из панели агента.
+    Аналог _apply_edit() в carousel.py.
+    Вызывается из callbacks.py по ag_edit_* callback_data.
+    """
+    # Ищем последнюю активную сессию агента с last_result
+    _s = None
+    _spec_key = None
+    # Сначала пробуем найти через __ag_edit__ ключи
+    try:
+        from db import get_redis
+        r = await get_redis()
+        async for _key in r.scan_iter(f"bot:session:{user_id}:__ag_edit_*"):
+            import json as _j
+            _raw = await r.get(_key)
+            if _raw:
+                _candidate = _j.loads(_raw)
+                if _candidate.get("last_result"):
+                    _s = _candidate
+                    _spec_key = _candidate.get("spec_key", "post")
+                    break
+    except Exception:
+        pass
+
+    # Fallback: последний результат из БД
+    if not _s or not _s.get("last_result"):
+        try:
+            from db import get_results
+            _recent = await get_results(user_id, limit=1)
+            if _recent:
+                _s = {"last_result": _recent[0]["content"], "spec_key": _recent[0]["agent_key"]}
+                _spec_key = _recent[0]["agent_key"]
+        except Exception:
+            pass
+
+    if not _s or not _s.get("last_result"):
+        await send(update, "Нет материала для правки — создай что-нибудь сначала.",
+                   reply_markup=kb(["← Меню|menu_main"]))
+        return
+
+    current   = _s["last_result"]
+    _spec_key = _spec_key or "post"
+    prompts   = _get_agent_refine_prompts(_spec_key)
+    instruction = prompts.get(edit_key, f"Улучши текст: {edit_key}.")
+
+    profile = await get_profile(user_id)
+    spec    = get_spec(_spec_key)
+
+    system = (
+        f"Ты — редактор контента. "
+        f"Ниша автора: {profile.get('niche', '')}. "
+        f"Аудитория: {profile.get('audience', '')}. "
+        f"Тон: {profile.get('tone', 'живой')}.\n\n"
+        f"Текущий материал:\n{current}"
+    )
+
+    status = await update.effective_chat.send_message("Переписываю...")
+    try:
+        from llm import complete_long
+        new_result = await complete_long(system, instruction, model_key="claude", temperature=0.8)
+    except Exception as e:
+        logger.error(f"[agents] apply_edit {edit_key} failed: {e}")
+        await safe_delete(status)
+        _panel = _agent_edit_panel_kb(_spec_key)
+        await send(update, "Не получилось — попробуй ещё раз 🔁", reply_markup=_panel)
+        return
+
+    await safe_delete(status)
+
+    if not new_result or not new_result.strip():
+        await send(update, "Пустой ответ — попробуй ещё раз.",
+                   reply_markup=_agent_edit_panel_kb(_spec_key))
+        return
+
+    # Обновляем сохранённый last_result
+    _s["last_result"] = new_result
+    try:
+        await save_agent_session(user_id, f"__ag_edit_{_spec_key}__", _s)
+    except Exception:
+        pass
+
+    try:
+        _name = spec.name if spec else _spec_key
+        await save_result(user_id, _spec_key, f"{_name} (правка)", new_result)
+    except Exception:
+        pass
+
+    # Отправляем
+    full  = f"✅ *Готово!*\n\n{new_result}"
+    CHUNK = 3800
+    if len(full) <= CHUNK:
+        await send(update, full, parse_mode="Markdown")
+    else:
+        preview = full[:CHUNK].rsplit("\n", 1)[0]
+        await send(update, preview + "\n\n_...продолжение ниже_", parse_mode="Markdown")
+        rest = full[len(preview):]
+        for chunk in [rest[i:i + 4000] for i in range(0, len(rest), 4000)]:
+            await asyncio.sleep(0.3)
+            await send(update, chunk, parse_mode="Markdown")
+
+    await send(update, "Ещё докрутить?", reply_markup=_agent_edit_panel_kb(_spec_key))

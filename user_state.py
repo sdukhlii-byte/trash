@@ -37,45 +37,52 @@ class UserState(Enum):
 
 async def get_user_state(user_id: int) -> UserState:
     """
-    Единая точка определения состояния.
-    Сначала проверяем кэш — если промах, считаем из БД и кладём в кэш.
+    Single source of truth for user state.
+    Cache-first: Redis (TTL 60s) → compute from DB on miss.
 
-    Fallback при ошибке:
-    - Если Redis недоступен на первом чтении — идём в _compute
-    - Если Postgres недоступен в _compute — возвращаем SUBSCRIBED
-      (безопасный дефолт: лучше дать доступ платящему юзеру чем сломать онбординг новому)
-    - Никогда не возвращаем NEW при ошибке инфраструктуры
+    Fallback on infrastructure failure (v2):
+    - If Redis unavailable on read → fall through to _compute
+    - If Postgres unavailable in _compute:
+        * If valid cached state existed before → return that (user had a known state)
+        * Otherwise → return EXPIRED (safe: shows paywall, doesn't grant free access)
+    - Never return NEW on infrastructure error (breaks onboarding for existing users)
     """
+    last_known: UserState | None = None
+
     try:
-        # 1. Быстрый путь: кэш
+        # 1. Fast path: cache
         try:
             cached = await kv_get(user_id, _STATE_KEY)
             if cached:
                 try:
-                    return UserState(cached)
+                    last_known = UserState(cached)
+                    return last_known
                 except ValueError:
-                    pass  # невалидное значение — пересчитаем
+                    pass  # invalid cached value — recompute
         except Exception:
-            pass  # Redis недоступен — идём дальше к _compute
+            pass  # Redis unavailable — continue to _compute
 
-        # 2. Медленный путь: расчёт
+        # 2. Slow path: compute from DB
         state = await _compute_user_state(user_id)
 
-        # 3. Кэшируем (не кэшируем NEW — состояние меняется быстро)
+        # 3. Cache result (don't cache NEW — it changes fast)
         if state != UserState.NEW:
             try:
                 await kv_set(user_id, _STATE_KEY, state.value, ttl=STATE_CACHE_TTL)
             except Exception:
-                pass  # не смогли закэшировать — не страшно
+                pass
 
         return state
 
     except Exception as e:
         logger.error(f"get_user_state error uid={user_id}: {e}", exc_info=True)
-        # ВАЖНО: при ошибке Postgres возвращаем SUBSCRIBED, не NEW.
-        # NEW ломает онбординг для существующих пользователей и скрывает платящих.
-        # SUBSCRIBED — безопасный дефолт: даём доступ, не ломаем воронку.
-        return UserState.SUBSCRIBED
+        # Safe fallback hierarchy:
+        # - Known cached state → trust it (user existed before outage)
+        # - No cache → EXPIRED: shows paywall, doesn't grant free access
+        # Previously was SUBSCRIBED (grants free access during outage — wrong).
+        if last_known is not None and last_known != UserState.NEW:
+            return last_known
+        return UserState.EXPIRED
 
 
 async def invalidate_state_cache(user_id: int) -> None:

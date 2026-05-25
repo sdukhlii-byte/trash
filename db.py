@@ -74,6 +74,21 @@ async def init_db() -> None:
                 ON results (user_id, ts DESC)
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS voice_signals (
+                id         BIGSERIAL PRIMARY KEY,
+                user_id    BIGINT      NOT NULL,
+                kind       TEXT        NOT NULL,
+                agent_key  TEXT        NOT NULL DEFAULT '',
+                content    TEXT        NOT NULL,
+                ts         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_voice_signals_user_kind
+                ON voice_signals (user_id, kind, ts DESC)
+        """)
+
     logger.info("Postgres pool ready")
 
     from lava_payments import init_payments_db

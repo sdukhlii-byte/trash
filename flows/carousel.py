@@ -408,14 +408,19 @@ async def _send_result(
         reply_markup=_edit_panel_kb(),
     )
 
-    # Voice feedback
+    # Voice feedback (fatigue guard)
     try:
-        from db import get_results as _gr
+        from db import get_results as _gr, get_stats as _gs
+        from voice_learner import get_voice_stats, should_show_voice_feedback
         _recent = await _gr(user_id, limit=1)
         if _recent:
             await asyncio.sleep(0.5)
-            await send(update, "Звучит как твой голос?",
-                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+            _vs        = await get_voice_stats(user_id)
+            _total     = _vs.get("total_signals", 0)
+            _gen_count = (await _gs(user_id)).get("total", 1)
+            if should_show_voice_feedback(_total, _gen_count):
+                await send(update, "Звучит как твой голос?",
+                           reply_markup=voice_feedback_kb(_recent[0]["id"]))
     except Exception:
         pass
 

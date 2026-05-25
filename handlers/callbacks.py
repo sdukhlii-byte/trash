@@ -24,6 +24,11 @@ from lava_payments import (
 )
 from flows import reels, carousel
 from flows.reels import _RS_KEY
+from flows.reels import (
+    rs_edit_softer, rs_edit_bolder, rs_edit_top5,
+    rs_edit_style, rs_apply_style, rs_edit_back,
+    rs_pick_for_desc, rs_regen,
+)
 from flows.carousel import _CAR_KEY, carousel_format_kb, carousel_trigger_kb
 from flows.misc import (
     qi_start, refine_start, regen_last, regen_by_id,
@@ -366,70 +371,56 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         return
 
     if data == "rs_regen":
+        await rs_regen(update, user_id)
+        return
+
+    # Панель доработки хуков
+    if data == "rs_edit_softer":
+        await rs_edit_softer(update, user_id)
+        return
+
+    if data == "rs_edit_bolder":
+        await rs_edit_bolder(update, user_id)
+        return
+
+    if data == "rs_edit_top5":
+        await rs_edit_top5(update, user_id)
+        return
+
+    if data == "rs_edit_style":
+        await rs_edit_style(update, user_id)
+        return
+
+    if data == "rs_edit_back":
+        await rs_edit_back(update, user_id)
+        return
+
+    if data.startswith("rs_style_"):
+        style_key = data[9:]
+        await rs_apply_style(update, user_id, style_key)
+        return
+
+    # Описание к выбранному хуку
+    if data == "rs_pick_for_desc":
+        await rs_pick_for_desc(update, user_id)
+        return
+
+    if data == "rs_desc_skip":
         s = await get_agent_session(user_id, _RS_KEY)
         if s:
-            await reels.rs_gen_headlines(update, user_id, s.get("topic", ""))
+            s["desc_details"] = ""
+            await save_agent_session(user_id, _RS_KEY, s)
+            await reels.rs_generate_desc(update, user_id, s)
         else:
             await reels.rs_start(update, user_id)
         return
 
-    if data == "rs_pick":
-        await reels.rs_pick(update, user_id)
-        return
-
-    if data == "rs_add_details":
+    if data == "rs_retry_desc":
         s = await get_agent_session(user_id, _RS_KEY)
         if s:
-            s["step"] = "await_details_text"
-            await save_agent_session(user_id, _RS_KEY, s)
-            await edit(query, "✍️ *Напиши детали:*\n\n_Личная история, кейс, цифры_",
-                       parse_mode="Markdown")
-        return
-
-    if data == "rs_skip_details":
-        s = await get_agent_session(user_id, _RS_KEY)
-        if s:
-            s["details"] = ""
-            await save_agent_session(user_id, _RS_KEY, s)
-            await reels.rs_await_destination(update, user_id, s)
-        return
-
-    if data == "rs_default_cta":
-        s = await get_agent_session(user_id, _RS_KEY)
-        if s:
-            s["destination"] = "подписаться на канал"
-            await save_agent_session(user_id, _RS_KEY, s)
-            await reels.rs_generate(update, user_id, s)
-        return
-
-    if data == "rs_retry_gen":
-        s = await get_agent_session(user_id, _RS_KEY)
-        if s:
-            await reels.rs_generate(update, user_id, s)
+            await reels.rs_generate_desc(update, user_id, s)
         else:
             await reels.rs_start(update, user_id)
-        return
-
-    if data == "rs_back_to_pick":
-        s = await get_agent_session(user_id, _RS_KEY)
-        if not s:
-            last = await get_agent_session(user_id, "__rs_last__")
-            if last and last.get("headlines"):
-                s = {"step": "enter_headline", "topic": last["topic"], "headlines": last["headlines"]}
-                await save_agent_session(user_id, _RS_KEY, s)
-                await send(update,
-                           f"🎯 *Заголовки — тема:* _{last['topic']}_\n\n{last['headlines']}\n\n"
-                           "Напиши *номер* (1–14) или скопируй нужный заголовок:",
-                           parse_mode="Markdown",
-                           reply_markup=kb(["← Назад|rs_regen", "← Меню|menu_main"]))
-            else:
-                await reels.rs_start(update, user_id)
-        else:
-            s["step"] = "enter_headline"
-            await save_agent_session(user_id, _RS_KEY, s)
-            await send(update, "Напиши *номер* (1–14) или скопируй нужный заголовок:",
-                       parse_mode="Markdown",
-                       reply_markup=kb(["← Назад|rs_regen", "← Меню|menu_main"]))
         return
 
     # ── Карусель ──────────────────────────────────────────────────────────────
@@ -867,6 +858,22 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             await handle_voice_feedback_no(update, user_id, result_id)
         except Exception as e:
             await edit(query, "Что именно не так? Напиши одним предложением.")
+        return
+
+    # ── Панель доработки агентов (ag_edit_*) ─────────────────────────────────
+    # Аналог car_edit_* в карусели — применяет правку к последнему результату
+
+    if data.startswith("ag_edit_"):
+        edit_key_map = {
+            "ag_edit_softer":  "softer",
+            "ag_edit_bolder":  "bolder",
+            "ag_edit_shorter": "shorter",
+            "ag_edit_detail":  "add_detail",
+            "ag_edit_cta":     "stronger_cta",
+        }
+        edit_key = edit_key_map.get(data)
+        if edit_key:
+            await ag.apply_agent_edit(update, user_id, edit_key)
         return
 
     # ── Follow-up ответы ─────────────────────────────────────────────────────

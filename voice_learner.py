@@ -1,25 +1,27 @@
 """
-voice_learner.py — петля обратной связи: выход улучшается с каждой генерацией.
+voice_learner.py — feedback loop: output improves with each generation.
 
-ЭТО ГЛАВНЫЙ DIFFERENTIATOR от ChatGPT.
+Storage (v2):
+  Postgres = source of truth (voice_signals table)
+  Redis    = read cache (TTL 5 min, invalidated on write)
 
-Как работает:
-1. После каждого результата — одна кнопка «Звучит как я ✓ / Не совсем ✗»
-2. Если «не совсем» → Мира спрашивает что именно не так (1 вопрос)
-3. Ответ сохраняется как "voice note" в Redis
-4. При следующей генерации voice notes инжектируются в system prompt
-5. Через 5-7 генераций бот начинает стабильно попадать в голос
+  Previously Redis-only: any restart wiped weeks of trained voice.
+  Now: Redis falls back to Postgres on miss; writes go to both.
 
-Данные которые накапливаются:
-- voice_notes: ["слишком официально", "добавь юмора", "короче абзацы"]
-- approved_samples: последние 3 одобренных результата (лучше чем style_examples)
-- rejection_patterns: что именно отклоняли
+How it works:
+  1. After every result — one button «Sounds like me ✓ / Not quite ✗»
+  2. «Not quite» → Mira asks what exactly is wrong (1 question)
+  3. Answer saved as voice note
+  4. On next generation voice notes are injected into system prompt
+  5. After 5-7 generations the bot reliably matches the user's voice
 
-Это создаёт эффект «получает с каждым разом лучше» —
-главную причину платить за подписку а не разовый ChatGPT-промпт.
+Security (v2):
+  Voice notes are user-supplied text injected into system prompts.
+  They are now sanitised before storage to block prompt injection.
 """
 import json
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -29,103 +31,230 @@ _APPROVED_KEY       = "__approved_samples__"
 _REJECTION_KEY      = "__rejection_patterns__"
 _FEEDBACK_STEP_KEY  = "__feedback_step__"
 
+_CACHE_TTL    = 300   # 5 min Redis cache for voice data
 MAX_VOICE_NOTES  = 10
 MAX_APPROVED     = 5
 
+# ── Injection sanitisation ────────────────────────────────────────────────────
 
-# ── Сохранение обратной связи ─────────────────────────────────────────────────
+# Patterns that indicate a prompt injection attempt.
+_INJECTION_RE = re.compile(
+    r"(ignore\s+(all\s+)?(previous|above|prior)|"
+    r"забудь\s+(все\s+)?инструкции|"
+    r"системн\w+\s+промпт|"
+    r"you\s+are\s+now|"
+    r"act\s+as\s+|"
+    r"<\s*/?system|"
+    r"\[INST\]|"
+    r"###\s*(system|instruction)|"
+    r"игнорир\w+\s+(все\s+)?инструкции|"
+    r"новые\s+инструкции)",
+    re.IGNORECASE,
+)
+
+def _sanitise(text: str, max_len: int = 200) -> Optional[str]:
+    """
+    Strip and length-limit user voice input.
+    Returns None if the input looks like a prompt injection attempt.
+    """
+    text = text.strip()[:max_len]
+    if _INJECTION_RE.search(text):
+        logger.warning("Voice note blocked (injection pattern): %r", text[:80])
+        return None
+    # Wrap in XML-style fence so the LLM treats it as data, not instructions.
+    # The fence is added at injection time in build_voice_context().
+    return text
+
+
+# ── Postgres persistence ──────────────────────────────────────────────────────
+
+async def _pg_save_signal(user_id: int, kind: str, agent_key: str, content: str) -> None:
+    """Insert one voice signal row into Postgres."""
+    try:
+        from db import _get_pool
+        pool = _get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO voice_signals (user_id, kind, agent_key, content) "
+                "VALUES ($1, $2, $3, $4)",
+                user_id, kind, agent_key, content,
+            )
+    except Exception as e:
+        logger.error("_pg_save_signal failed uid=%s kind=%s: %s", user_id, kind, e)
+
+
+async def _pg_load_signals(user_id: int, kind: str, limit: int) -> list[dict]:
+    """Load voice signal rows from Postgres, newest first."""
+    try:
+        from db import _get_pool
+        pool = _get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT agent_key, content FROM voice_signals "
+                "WHERE user_id=$1 AND kind=$2 ORDER BY ts DESC LIMIT $3",
+                user_id, kind, limit,
+            )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error("_pg_load_signals failed uid=%s kind=%s: %s", user_id, kind, e)
+        return []
+
+
+# ── Redis cache helpers ───────────────────────────────────────────────────────
+
+async def _cache_get(user_id: int, key: str) -> Optional[list]:
+    try:
+        from db import kv_get
+        raw = await kv_get(user_id, key)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+async def _cache_set(user_id: int, key: str, data: list) -> None:
+    try:
+        from db import kv_set
+        await kv_set(user_id, key, json.dumps(data, ensure_ascii=False), ttl=_CACHE_TTL)
+    except Exception:
+        pass
+
+
+async def _cache_del(user_id: int, key: str) -> None:
+    try:
+        from db import kv_del
+        await kv_del(user_id, key)
+    except Exception:
+        pass
+
+
+# ── Public write API ──────────────────────────────────────────────────────────
 
 async def mark_approved(user_id: int, agent_key: str, content: str) -> None:
-    """Пользователь одобрил результат — сохраняем как эталон голоса."""
-    from db import kv_get, kv_set
-    try:
-        raw = await kv_get(user_id, _APPROVED_KEY)
-        approved = json.loads(raw) if raw else []
-        approved.insert(0, {"agent": agent_key, "text": content[:800]})
-        approved = approved[:MAX_APPROVED]
-        await kv_set(user_id, _APPROVED_KEY, json.dumps(approved, ensure_ascii=False))
-        logger.debug(f"Voice approved: user={user_id} agent={agent_key}")
-    except Exception as e:
-        logger.warning(f"mark_approved failed: {e}")
+    """User approved result — save as voice reference sample."""
+    entry = {"agent": agent_key, "text": content[:800]}
+    # 1. Postgres (source of truth)
+    await _pg_save_signal(user_id, "approved", agent_key, content[:800])
+    # 2. Redis cache: prepend + trim
+    cached = await _cache_get(user_id, _APPROVED_KEY) or []
+    cached.insert(0, entry)
+    cached = cached[:MAX_APPROVED]
+    await _cache_set(user_id, _APPROVED_KEY, cached)
+    logger.debug("Voice approved: user=%s agent=%s", user_id, agent_key)
 
 
-async def add_voice_note(user_id: int, note: str) -> None:
-    """Добавляет замечание к голосу пользователя."""
-    from db import kv_get, kv_set
-    try:
-        raw = await kv_get(user_id, _VOICE_NOTES_KEY)
-        notes = json.loads(raw) if raw else []
-        note = note.strip()[:200]
-        if note and note not in notes:
-            notes.insert(0, note)
-            notes = notes[:MAX_VOICE_NOTES]
-        await kv_set(user_id, _VOICE_NOTES_KEY, json.dumps(notes, ensure_ascii=False))
-    except Exception as e:
-        logger.warning(f"add_voice_note failed: {e}")
+async def add_voice_note(user_id: int, note: str) -> bool:
+    """
+    Add a style correction note.
+    Returns False (and logs) if the note is blocked as injection attempt.
+    """
+    clean = _sanitise(note, max_len=200)
+    if clean is None:
+        return False
+    # 1. Postgres
+    await _pg_save_signal(user_id, "note", "", clean)
+    # 2. Redis cache: prepend + trim + dedup
+    cached = await _cache_get(user_id, _VOICE_NOTES_KEY) or []
+    if clean not in cached:
+        cached.insert(0, clean)
+        cached = cached[:MAX_VOICE_NOTES]
+        await _cache_set(user_id, _VOICE_NOTES_KEY, cached)
+    return True
 
 
 async def add_rejection_pattern(user_id: int, pattern: str) -> None:
-    """Что конкретно отклонили — для future negative reinforcement."""
-    from db import kv_get, kv_set
-    try:
-        raw = await kv_get(user_id, _REJECTION_KEY)
-        patterns = json.loads(raw) if raw else []
-        patterns.insert(0, pattern.strip()[:150])
-        patterns = patterns[:8]
-        await kv_set(user_id, _REJECTION_KEY, json.dumps(patterns, ensure_ascii=False))
-    except Exception as e:
-        logger.warning(f"add_rejection_pattern failed: {e}")
+    """What was specifically rejected — for negative reinforcement."""
+    clean = _sanitise(pattern, max_len=150)
+    if clean is None:
+        return
+    await _pg_save_signal(user_id, "rejection", "", clean)
+    cached = await _cache_get(user_id, _REJECTION_KEY) or []
+    cached.insert(0, clean)
+    cached = cached[:8]
+    await _cache_set(user_id, _REJECTION_KEY, cached)
 
 
-# ── Построение контекста голоса ────────────────────────────────────────────────
+# ── Read API (cache → Postgres fallback) ─────────────────────────────────────
+
+async def _get_approved(user_id: int) -> list:
+    cached = await _cache_get(user_id, _APPROVED_KEY)
+    if cached is not None:
+        return cached
+    rows = await _pg_load_signals(user_id, "approved", MAX_APPROVED)
+    data = [{"agent": r["agent_key"], "text": r["content"]} for r in rows]
+    await _cache_set(user_id, _APPROVED_KEY, data)
+    return data
+
+
+async def _get_notes(user_id: int) -> list:
+    cached = await _cache_get(user_id, _VOICE_NOTES_KEY)
+    if cached is not None:
+        return cached
+    rows = await _pg_load_signals(user_id, "note", MAX_VOICE_NOTES)
+    data = [r["content"] for r in rows]
+    await _cache_set(user_id, _VOICE_NOTES_KEY, data)
+    return data
+
+
+async def _get_rejections(user_id: int) -> list:
+    cached = await _cache_get(user_id, _REJECTION_KEY)
+    if cached is not None:
+        return cached
+    rows = await _pg_load_signals(user_id, "rejection", 8)
+    data = [r["content"] for r in rows]
+    await _cache_set(user_id, _REJECTION_KEY, data)
+    return data
+
+
+# ── Build voice context for system prompt injection ───────────────────────────
 
 async def build_voice_context(user_id: int) -> str:
     """
-    Строит блок для инжекции в system prompt генератора.
-    Включает одобренные образцы + замечания к голосу + паттерны отклонения.
+    Build block for injection into generator system prompt.
+    Includes approved samples + style notes + rejection patterns.
+    Content is XML-fenced to prevent it from being interpreted as instructions.
 
-    Возвращает пустую строку если данных нет (первая генерация).
+    Returns empty string on first generation (no data yet).
     """
-    from db import kv_get, get_style_examples
+    from db import get_style_examples
     parts = []
 
     try:
-        # 1. Одобренные образцы (важнее style_examples — это то что понравилось)
-        raw_approved = await kv_get(user_id, _APPROVED_KEY)
-        approved = json.loads(raw_approved) if raw_approved else []
+        # 1. Approved samples (stronger signal than style_examples)
+        approved = await _get_approved(user_id)
         if approved:
             samples = "\n---\n".join(a["text"] for a in approved[:3])
             parts.append(
-                f"ОДОБРЕННЫЕ ОБРАЗЦЫ ГОЛОСА АВТОРА (результаты которые он отметил как «звучит как я»):\n{samples}"
+                "APPROVED VOICE SAMPLES (results the author marked as «sounds like me»):\n"
+                f"<voice_samples>\n{samples}\n</voice_samples>"
             )
 
-        # 2. Если нет одобренных — берём style_examples
+        # 2. Fall back to manually-added style examples if no approved yet
         if not approved:
             style = await get_style_examples(user_id)
             if style:
                 samples = "\n---\n".join(style[-3:])
                 parts.append(
-                    f"ПРИМЕРЫ СТИЛЯ АВТОРА (добавлены вручную):\n{samples}"
+                    "AUTHOR STYLE EXAMPLES (added manually):\n"
+                    f"<style_examples>\n{samples}\n</style_examples>"
                 )
 
-        # 3. Замечания к голосу
-        raw_notes = await kv_get(user_id, _VOICE_NOTES_KEY)
-        notes = json.loads(raw_notes) if raw_notes else []
+        # 3. Style correction notes
+        notes = await _get_notes(user_id)
         if notes:
             notes_text = "\n".join(f"• {n}" for n in notes[:5])
             parts.append(
-                f"ВАЖНЫЕ ЗАМЕЧАНИЯ К ГОЛОСУ (то что автор хочет изменить):\n{notes_text}"
+                "STYLE CORRECTION NOTES (what the author wants changed):\n"
+                f"<voice_notes>\n{notes_text}\n</voice_notes>"
             )
 
-        # 4. Паттерны отклонения
-        raw_rej = await kv_get(user_id, _REJECTION_KEY)
-        rejections = json.loads(raw_rej) if raw_rej else []
+        # 4. Rejection patterns
+        rejections = await _get_rejections(user_id)
         if rejections:
-            rej_text = "\n".join(f"• Избегать: {r}" for r in rejections[:4])
-            parts.append(rej_text)
+            rej_text = "\n".join(f"• Avoid: {r}" for r in rejections[:4])
+            parts.append(f"<rejection_patterns>\n{rej_text}\n</rejection_patterns>")
 
     except Exception as e:
-        logger.warning(f"build_voice_context failed: {e}")
+        logger.warning("build_voice_context failed uid=%s: %s", user_id, e)
         return ""
 
     if not parts:
@@ -135,14 +264,12 @@ async def build_voice_context(user_id: int) -> str:
 
 
 async def get_voice_stats(user_id: int) -> dict:
-    """Статистика накопленного голоса для UI."""
-    from db import kv_get, get_style_examples
+    """Voice accumulation stats for UI."""
     try:
-        raw_approved = await kv_get(user_id, _APPROVED_KEY)
-        approved = json.loads(raw_approved) if raw_approved else []
-        raw_notes = await kv_get(user_id, _VOICE_NOTES_KEY)
-        notes = json.loads(raw_notes) if raw_notes else []
-        style = await get_style_examples(user_id)
+        from db import get_style_examples
+        approved   = await _get_approved(user_id)
+        notes      = await _get_notes(user_id)
+        style      = await get_style_examples(user_id)
         return {
             "approved_count": len(approved),
             "notes_count":    len(notes),
@@ -154,10 +281,22 @@ async def get_voice_stats(user_id: int) -> dict:
                 "style_count": 0, "total_signals": 0}
 
 
-# ── UI: кнопка после результата ───────────────────────────────────────────────
+# ── UI: feedback button after result ─────────────────────────────────────────
+
+_FEEDBACK_SHOW_EVERY = 5   # after 10 signals: show only every N generations
+
+def should_show_voice_feedback(total_signals: int, generation_count: int) -> bool:
+    """
+    Avoid fatigue: show voice feedback on every generation until 10 signals,
+    then only every 5 generations.
+    """
+    if total_signals < 10:
+        return True
+    return (generation_count % _FEEDBACK_SHOW_EVERY) == 0
+
 
 def voice_feedback_kb(result_id: int):
-    """Инлайн-кнопки обратной связи по голосу."""
+    """Inline feedback buttons."""
     from utils import kb
     return kb(
         [f"✅ Звучит как я|vf_yes_{result_id}",
@@ -165,12 +304,12 @@ def voice_feedback_kb(result_id: int):
     )
 
 
-# ── Callback обработчики ──────────────────────────────────────────────────────
+# ── Callback handlers ─────────────────────────────────────────────────────────
 
 async def handle_voice_feedback_yes(
     update, user_id: int, result_id: int
 ) -> None:
-    """Пользователь одобрил результат."""
+    """User approved result."""
     from db import get_result_by_id
     from utils import send, kb
 
@@ -179,7 +318,7 @@ async def handle_voice_feedback_yes(
         if r:
             await mark_approved(user_id, r["agent_key"], r["content"])
     except Exception as e:
-        logger.warning(f"voice_feedback_yes result load: {e}")
+        logger.warning("voice_feedback_yes result load: %s", e)
 
     stats = await get_voice_stats(user_id)
     total = stats["total_signals"]
@@ -203,7 +342,7 @@ async def handle_voice_feedback_yes(
 async def handle_voice_feedback_no(
     update, user_id: int, result_id: int
 ) -> None:
-    """Пользователь отклонил — запрашиваем одно замечание."""
+    """User rejected — ask for one correction note."""
     from db import kv_set
     from utils import send, kb
 
@@ -221,7 +360,7 @@ async def handle_voice_feedback_no(
 async def handle_voice_note_text(
     update, user_id: int, text: str
 ) -> bool:
-    """Обрабатывает текстовое замечание к голосу. Возвращает True если потреблено."""
+    """Process text correction note. Returns True if consumed."""
     from db import kv_get, kv_del
     from utils import send, kb
 
@@ -230,11 +369,18 @@ async def handle_voice_note_text(
         return False
 
     await kv_del(user_id, _FEEDBACK_STEP_KEY)
-    await add_voice_note(user_id, text)
+    saved = await add_voice_note(user_id, text)
 
-    stats = await get_voice_stats(user_id)
-    total = stats["total_signals"]
+    if not saved:
+        # Injection attempt blocked — respond neutrally
+        await send(
+            update,
+            "Не смогла сохранить — попробуй описать иначе.",
+            reply_markup=kb(["← Меню|menu_main"]),
+        )
+        return True
 
+    # Single stats call (fixed: was called twice)
     stats = await get_voice_stats(user_id)
     total = stats["total_signals"]
 

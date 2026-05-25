@@ -65,7 +65,12 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
     )
     status = await update.effective_chat.send_message("Генерирую 10 идей под твою нишу...")
     try:
+        from voice_learner import build_voice_context
+        from niche_intel import build_niche_context
+        voice_ctx = await build_voice_context(user_id)
+        niche_ctx = build_niche_context(profile.get("niche", ""))
         qi_sys = protect(user_id, await get_prompt(user_id, "quick_ideas", QUICK_IDEAS_SYSTEM))
+        qi_sys = qi_sys + voice_ctx + niche_ctx
         result = await complete(qi_sys, prompt, temperature=0.85)
     except Exception as e:
         logger.error(f"[qi] generate error: {e}")
@@ -93,26 +98,28 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
     except Exception:
         pass
 
-    # Voice feedback — узнаём звучит ли как автор
+    # Voice feedback — only while useful (fatigue guard: skip if well-trained)
     try:
         import asyncio
-        from db import get_results as _gr
-        from voice_learner import voice_feedback_kb, get_voice_stats
+        from db import get_results as _gr, get_stats as _gs
+        from voice_learner import voice_feedback_kb, get_voice_stats, should_show_voice_feedback
         _recent = await _gr(user_id, limit=1)
         if _recent:
             await asyncio.sleep(0.5)
             _vs    = await get_voice_stats(user_id)
             _total = _vs.get("total_signals", 0)
-            if _total < 5:
-                _filled = "▓" * _total if _total else ""
-                _empty  = "░" * (5 - _total)
-                _hint   = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5_" if _total else \
-                          "\n\n_Оцени — и Мира запомнит твой стиль._"
-            else:
-                _hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов) 🎯_"
-            await send(update, f"Звучит как твой голос?{_hint}",
-                       parse_mode="Markdown",
-                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+            _gen_count = (await _gs(user_id)).get("total", 1)
+            if should_show_voice_feedback(_total, _gen_count):
+                if _total < 5:
+                    _filled = "▓" * _total if _total else ""
+                    _empty  = "░" * (5 - _total)
+                    _hint   = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5_" if _total else \
+                              "\n\n_Оцени — и Мира запомнит твой стиль._"
+                else:
+                    _hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов) 🎯_"
+                await send(update, f"Звучит как твой голос?{_hint}",
+                           parse_mode="Markdown",
+                           reply_markup=voice_feedback_kb(_recent[0]["id"]))
     except Exception:
         pass
 
@@ -176,7 +183,11 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
     prompt = f"Оригинальный текст:\n{original}\n\nЗадача: {instruction}"
     status = await update.effective_chat.send_message("Дорабатываю — держи...")
     try:
+        from voice_learner import build_voice_context
+        profile    = await get_profile(user_id)
+        voice_ctx  = await build_voice_context(user_id)
         refine_sys = protect(user_id, await get_prompt(user_id, "refine", REFINE_SYSTEM))
+        refine_sys = refine_sys + voice_ctx
         result = await complete(refine_sys, prompt, temperature=0.7)
     except Exception as e:
         logger.error(f"[refine] error: {e}")
@@ -237,7 +248,10 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
     prompt = f"Оригинал:\n{r['content']}"
     status = await update.effective_chat.send_message("Пишу другой вариант — ищу другой угол...")
     try:
-        regen_sys = protect(user_id, await get_prompt(user_id, "regen", REGEN_SYSTEM))
+        from voice_learner import build_voice_context
+        voice_ctx  = await build_voice_context(user_id)
+        regen_sys  = protect(user_id, await get_prompt(user_id, "regen", REGEN_SYSTEM))
+        regen_sys  = regen_sys + voice_ctx
         result = await complete(regen_sys, prompt, temperature=0.9, presence_penalty=0.4)
     except Exception as e:
         logger.error(f"[regen] error: {e}")

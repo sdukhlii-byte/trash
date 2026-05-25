@@ -143,12 +143,36 @@ async def _followup_job(ctx) -> None:
 
 async def handle_followup_callback(bot, user_id: int, data: str) -> None:
     """
-    Обрабатывает ответ пользователя на follow-up.
-    data формат: fu_{outcome}_{result_id}
+    Handle user's follow-up response.
+    data format: fu_{outcome}_{result_id}
+
+    v2: outcome feeds into voice learner —
+      good    → mark_approved (positive reinforcement)
+      bad/mid → add_rejection_pattern (negative reinforcement)
     """
-    parts   = data.split("_")
-    outcome = parts[1] if len(parts) > 1 else "mid"
+    parts     = data.split("_")
+    outcome   = parts[1] if len(parts) > 1 else "mid"
     result_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+    # Feed signal into voice learner
+    if result_id:
+        try:
+            from db import get_result_by_id
+            from voice_learner import mark_approved, add_rejection_pattern
+            r = await get_result_by_id(user_id, result_id)
+            if r:
+                if outcome == "good":
+                    await mark_approved(user_id, r["agent_key"], r["content"])
+                    logger.debug("Followup good → mark_approved uid=%s rid=%s", user_id, result_id)
+                elif outcome == "bad":
+                    await add_rejection_pattern(
+                        user_id,
+                        f"{r['agent_name']}: не сработало в публикации",
+                    )
+                    logger.debug("Followup bad → add_rejection uid=%s rid=%s", user_id, result_id)
+                # "mid" and "pending" — no signal, not enough info
+        except Exception as e:
+            logger.warning("followup voice signal failed uid=%s: %s", user_id, e)
 
     if outcome == "good":
         response = (
