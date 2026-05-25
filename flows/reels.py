@@ -224,29 +224,39 @@ async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict
         f"🎬 *Хуки — тема:* _{topic}_\n\n{headlines}",
         parse_mode="Markdown",
     )
-    await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
-
-    # Voice feedback (fatigue guard)
+    # Единое сообщение: панель правок + voice feedback
     try:
         from db import get_results as _gr, get_stats as _gs
-        from voice_learner import get_voice_stats, should_show_voice_feedback
+        from voice_learner import get_voice_stats, should_show_voice_feedback, voice_feedback_kb as _vfkb
+        from ui.progress_bar import voice_progress_short as _vps
         _recent = await _gr(user_id, limit=1)
         if _recent:
-            await asyncio.sleep(0.5)
+            _rid       = _recent[0]["id"]
             _vs        = await get_voice_stats(user_id)
             _total     = _vs.get("total_signals", 0)
             _gen_count = (await _gs(user_id)).get("total", 1)
             if should_show_voice_feedback(_total, _gen_count):
-                await send(update, "Звучит как твой голос?",
-                           reply_markup=voice_feedback_kb(_recent[0]["id"]))
+                _hint = _vps(_total)
+                combined_kb = _vfkb(_rid, extra_rows=[
+                    ["🎨 Мягче|rs_edit_softer",   "🔥 Жёстче|rs_edit_bolder"],
+                    ["🏆 Топ-5|rs_edit_top5",     "🎨 Стиль|rs_edit_style"],
+                    ["✅ Выбрать хук — описание|rs_pick_for_desc"],
+                    ["🔄 Другая тема|rs_regen",   "← Меню|menu_main"],
+                ])
+                await send(update, f"Звучит как твой голос?{_hint}",
+                           parse_mode="Markdown", reply_markup=combined_kb)
+            else:
+                await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+        else:
+            await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+    except Exception:
+        await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+
+    try:
+        from flows.proactive import schedule_proactive_hint
+        await schedule_proactive_hint(user_id, "reels_short")
     except Exception:
         pass
-
-    from ui.cabinet import maybe_show_upsell
-    await maybe_show_upsell(update, user_id)
-
-    from flows.proactive import maybe_suggest_next
-    await maybe_suggest_next(update, user_id, "reels_short", delay=1.2)
 
 
 # ── Панель доработки ──────────────────────────────────────────────────────────
@@ -453,21 +463,18 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
 
     try:
         from db import get_results as _gr, get_stats as _gs
-        from voice_learner import get_voice_stats, should_show_voice_feedback
-        _recent = await _gr(user_id, limit=1)
-        if _recent:
-            await asyncio.sleep(0.5)
-            _vs        = await get_voice_stats(user_id)
-            _total     = _vs.get("total_signals", 0)
-            _gen_count = (await _gs(user_id)).get("total", 1)
-            if should_show_voice_feedback(_total, _gen_count):
-                await send(update, "Звучит как твой голос?",
-                           reply_markup=voice_feedback_kb(_recent[0]["id"]))
+        from voice_learner import get_voice_stats, should_show_voice_feedback, voice_feedback_kb as _vfkb2
+        from ui.progress_bar import voice_progress_short as _vps2
+        _recent2 = await _gr(user_id, limit=1)
+        if _recent2:
+            _vs2       = await get_voice_stats(user_id)
+            _total2    = _vs2.get("total_signals", 0)
+            _gc2       = (await _gs(user_id)).get("total", 1)
+            if should_show_voice_feedback(_total2, _gc2):
+                await send(update, f"Звучит как твой голос?{_vps2(_total2)}",
+                           parse_mode="Markdown", reply_markup=_vfkb2(_recent2[0]["id"]))
     except Exception:
         pass
-
-    from ui.cabinet import maybe_show_upsell
-    await maybe_show_upsell(update, user_id)
 
 
 # ── Роутер текстовых сообщений ────────────────────────────────────────────────

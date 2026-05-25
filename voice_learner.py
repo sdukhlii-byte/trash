@@ -295,13 +295,22 @@ def should_show_voice_feedback(total_signals: int, generation_count: int) -> boo
     return (generation_count % _FEEDBACK_SHOW_EVERY) == 0
 
 
-def voice_feedback_kb(result_id: int):
-    """Inline feedback buttons."""
+def voice_feedback_kb(result_id: int, extra_rows: list | None = None):
+    """
+    Inline feedback buttons.
+
+    extra_rows — additional button rows to append after the voice feedback row.
+    Используется в agents._after_result для объединения voice feedback + панели правок
+    в одно сообщение вместо двух отдельных.
+    """
     from utils import kb
-    return kb(
+    rows = [
         [f"✅ Звучит как я|vf_yes_{result_id}",
          f"✏️ Не совсем|vf_no_{result_id}"],
-    )
+    ]
+    if extra_rows:
+        rows.extend(extra_rows)
+    return kb(*rows)
 
 
 # ── Callback handlers ─────────────────────────────────────────────────────────

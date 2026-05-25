@@ -402,33 +402,41 @@ async def _send_result(
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
-    await send(
-        update,
-        "Докрути под себя 👇",
-        reply_markup=_edit_panel_kb(),
-    )
-
-    # Voice feedback (fatigue guard)
+    # Единое сообщение: панель правок + voice feedback
     try:
         from db import get_results as _gr, get_stats as _gs
-        from voice_learner import get_voice_stats, should_show_voice_feedback
+        from voice_learner import get_voice_stats, should_show_voice_feedback, voice_feedback_kb as _vfkb
+        from ui.progress_bar import voice_progress_short as _vps
         _recent = await _gr(user_id, limit=1)
         if _recent:
-            await asyncio.sleep(0.5)
+            _rid       = _recent[0]["id"]
             _vs        = await get_voice_stats(user_id)
             _total     = _vs.get("total_signals", 0)
             _gen_count = (await _gs(user_id)).get("total", 1)
             if should_show_voice_feedback(_total, _gen_count):
-                await send(update, "Звучит как твой голос?",
-                           reply_markup=voice_feedback_kb(_recent[0]["id"]))
+                _hint = _vps(_total)
+                combined_kb = _vfkb(_rid, extra_rows=[
+                    ["🎨 Мягче|car_edit_softer",    "🔥 Жёстче|car_edit_bolder"],
+                    ["✂️ Сократить|car_edit_shorten", "➕ Слайд|car_edit_add_slide"],
+                    ["💪 Триггер|car_edit_trigger",  "🎨 Формат|car_edit_format"],
+                    ["✏️ Доработать свободно|refine_last", "🔄 Другой вариант|regen_last"],
+                    ["← Меню|menu_main"],
+                ])
+                await send(update, f"Звучит как твой голос?{_hint}",
+                           parse_mode="Markdown", reply_markup=combined_kb)
+            else:
+                await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+        else:
+            await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+    except Exception:
+        await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+
+    # Отложенная proactive-подсказка — покажется при следующем меню
+    try:
+        from flows.proactive import schedule_proactive_hint
+        await schedule_proactive_hint(user_id, "carousel")
     except Exception:
         pass
-
-    from ui.cabinet import maybe_show_upsell
-    await maybe_show_upsell(update, user_id)
-
-    from flows.proactive import maybe_suggest_next
-    await maybe_suggest_next(update, user_id, "carousel", delay=1.2)
 
 
 # ── Панель доработки ──────────────────────────────────────────────────────────

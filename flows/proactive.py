@@ -206,3 +206,69 @@ async def maybe_suggest_next(
         )
     except Exception as e:
         logger.warning(f"maybe_suggest_next failed for {user_id}/{agent_key}: {e}")
+
+
+async def suggest_next_on_menu(
+    update,
+    user_id: int,
+    last_agent_key: str,
+) -> bool:
+    """
+    Предлагает следующий шаг при открытии меню (не после генерации).
+
+    Возвращает True если показал подсказку.
+    Вызывается из show_home() или show_menu() — один раз за сессию.
+
+    АРХИТЕКТУРНОЕ РЕШЕНИЕ:
+    Proactive suggestion убрана из _after_result() чтобы избежать
+    нагромождения сообщений после генерации. Вместо этого она
+    показывается при следующем обращении к меню — органично и не навязчиво.
+    """
+    import asyncio
+    from user_state import get_user_state, has_access
+    from db import kv_get, kv_set, kv_del
+
+    try:
+        state = await get_user_state(user_id)
+        if not has_access(state):
+            return False
+
+        # Проверяем отложенную подсказку
+        dedup_key = "__proactive_pending__"
+        pending = await kv_get(user_id, dedup_key)
+        if not pending:
+            return False
+
+        await kv_del(user_id, dedup_key)
+
+        suggestions = _SUGGESTIONS.get(last_agent_key, _UNIVERSAL)
+        if not suggestions:
+            return False
+
+        text, btn_label, btn_data = random.choice(suggestions)
+        await send(
+            update,
+            text,
+            parse_mode="Markdown",
+            reply_markup=kb(
+                [f"{btn_label}|{btn_data}"],
+                ["← Пропустить|menu_main_clear"],
+            ),
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"suggest_next_on_menu failed for {user_id}/{last_agent_key}: {e}")
+        return False
+
+
+async def schedule_proactive_hint(user_id: int, agent_key: str) -> None:
+    """
+    Сохраняет отложенную подсказку в Redis для показа при следующем меню.
+    Вызывается из _after_result() вместо немедленного показа.
+    """
+    from db import kv_set as _kv_set
+    try:
+        await _kv_set(user_id, "__proactive_pending__", agent_key, ttl=3600)
+        await _kv_set(user_id, "__last_agent__", agent_key, ttl=3600)
+    except Exception as e:
+        logger.warning(f"schedule_proactive_hint failed uid={user_id}: {e}")

@@ -728,15 +728,25 @@ async def _send_result(update: Update, result: str,
 
 
 async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
-    """После результата — панель доработки (как в carousel.py) + voice feedback + upsell + проактив."""
+    """
+    После результата — одно единое сообщение с действиями.
+
+    АРХИТЕКТУРНЫЙ ПРИНЦИП:
+    Было: 4 отдельных сообщения (правки + voice feedback + upsell + proactive)
+    Стало: 1 сообщение с панелью правок + отложенный voice feedback
+
+    Upsell и proactive убраны из этого потока:
+    - Upsell показывается через конверсионный триггер по счётчику (intent_oneshot)
+    - Proactive suggestion показывается через 10 мин (job) или при следующем /menu
+    """
     from db import get_results, kv_set
+
     _result_id = 0
     try:
         _recent = await get_results(user_id, limit=1)
         if _recent:
             _result_id = _recent[0]["id"]
-            # Сохраняем last_result в сессии агента для панели правок
-            _content = _recent[0].get("content", "")
+            _content   = _recent[0].get("content", "")
             if _content:
                 try:
                     _s = await get_agent_session(user_id, spec.key) or {}
@@ -755,12 +765,9 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     except Exception:
         pass
 
-    # Панель доработки — пользователь видит конкретные ручки, не абстрактное «доработать»
-    await send(update, "Докрути под себя 👇", reply_markup=_agent_edit_panel_kb(spec.key))
-
-    # Voice feedback с прогресс-баром
+    # Строим подсказку voice-прогресса для первой строки кнопки
+    _voice_hint = ""
     if _result_id:
-        await asyncio.sleep(0.5)
         try:
             from voice_learner import get_voice_stats
             from ui.progress_bar import voice_progress_short
@@ -768,20 +775,37 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
             _total = _vs.get("total_signals", 0)
             _voice_hint = voice_progress_short(_total)
         except Exception:
-            _voice_hint = ""
+            pass
 
+    # Единственное сообщение после результата — панель правок + voice feedback
+    # Структура: voice question наверху (важнее), затем правки
+    if _result_id:
+        from utils import kb as _kb
+        from voice_learner import voice_feedback_kb as _vfkb
+
+        # Компактная панель: voice feedback + правки в одном сообщении
+        combined_kb = _vfkb(_result_id, extra_rows=[
+            ["🎨 Мягче|ag_edit_softer",           "🔥 Жёстче|ag_edit_bolder"],
+            ["✂️ Сократить|ag_edit_shorter",       "➕ Деталь|ag_edit_detail"],
+            ["✏️ Доработать свободно|refine_last", "🔄 Другой вариант|regen_last"],
+            [f"🔁 Заново|agent_restart_{spec.key}", "← Меню|menu_main"],
+        ])
         await send(
             update,
             f"Звучит как твой голос?{_voice_hint}",
             parse_mode="Markdown",
-            reply_markup=voice_feedback_kb(_result_id),
+            reply_markup=combined_kb,
         )
+    else:
+        # Нет result_id — только панель правок
+        await send(update, "Докрути под себя 👇", reply_markup=_agent_edit_panel_kb(spec.key))
 
-    from ui.cabinet import maybe_show_upsell
-    await maybe_show_upsell(update, user_id)
-
-    from flows.proactive import maybe_suggest_next
-    await maybe_suggest_next(update, user_id, spec.key, delay=1.5)
+    # Сохраняем отложенную proactive-подсказку — покажется при следующем меню
+    try:
+        from flows.proactive import schedule_proactive_hint
+        await schedule_proactive_hint(user_id, spec.key)
+    except Exception:
+        pass
 
 
 async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:

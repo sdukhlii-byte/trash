@@ -328,13 +328,16 @@ def get_niche_intel(niche: str) -> dict:
 
 
 def build_niche_context(niche: str) -> str:
-    """Строит блок для инжекции в system prompt."""
+    """Строит блок для инжекции в system prompt.
+    Контент огорожен XML-тегами чтобы LLM воспринимал его как данные, а не инструкции.
+    """
     intel = get_niche_intel(niche)
     parts = []
     if intel.get("works"):
-        parts.append(f"ЗНАНИЕ О НИШЕ (используй это при генерации):\n{intel['works']}")
+        parts.append(intel["works"])
     if intel.get("avoid"):
         parts.append(intel["avoid"])
     if not parts:
         return ""
-    return "\n\n" + "\n\n".join(parts)
+    body = "\n\n".join(parts)
+    return f"\n\n<niche_context>\n{body}\n</niche_context>"

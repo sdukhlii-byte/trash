@@ -751,55 +751,45 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             except Exception as _e:
                 logger.warning(f"oneshot save_result failed: {_e}")
 
-            await send(update, result, parse_mode="Markdown",
-                       reply_markup=kb(
-                           [f"⚡ Детальнее с вопросами|{deep_cb}",
-                            f"💾 Сохранить|oneshot_save_{agent_key}"],
-                           ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
-                       ))
             await kv_set(user_id, "__oneshot_draft__",
                          json.dumps({"agent": agent_key, "name": name, "content": result},
                                     ensure_ascii=False))
 
-            # Voice feedback на oneshot тоже
+            # Результат с действиями в одной клавиатуре
+            await send(update, result, parse_mode="Markdown",
+                       reply_markup=kb(
+                           [f"⚡ Детальнее|{deep_cb}",
+                            f"💾 Сохранить|oneshot_save_{agent_key}"],
+                           ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
+                           ["← Меню|menu_main"],
+                       ))
+
+            # Voice feedback
             if _result_id:
-                import asyncio as _aio
-                await _aio.sleep(0.8)
                 from voice_learner import voice_feedback_kb as _vfkb, get_voice_stats as _gvs
+                from ui.progress_bar import voice_progress_short as _vps
                 try:
-                    _vs    = await _gvs(user_id)
-                    _total = _vs.get("total_signals", 0)
-                    if _total == 0:
-                        _hint = "\n\n_Оцени — и я запомню как ты пишешь._"
-                    elif _total < 5:
-                        _filled = "▓" * _total
-                        _empty  = "░" * (5 - _total)
-                        _hint   = f"\n\n_Учу твой стиль: [{_filled}{_empty}] {_total}/5_"
-                    else:
-                        _hint = f"\n\n_Пишу как ты: точно ({_total} примеров) 🎯_"
+                    _vs   = await _gvs(user_id)
+                    _hint = _vps(_vs.get("total_signals", 0))
                 except Exception:
                     _hint = ""
                 await send(update, f"Звучит как твой голос?{_hint}",
                            parse_mode="Markdown", reply_markup=_vfkb(_result_id))
 
-            # Usage-based конверсионный триггер (после 3-й генерации в триале)
+            # Конверсионный триггер: только 3-я генерация в триале
             try:
                 from db import get_stats as _gs
                 _state = await get_user_state(user_id)
                 if _state == UserState.TRIAL:
                     _stats = await _gs(user_id)
                     if _stats.get("total", 0) == 3:
-                        import asyncio as _aio2
-                        await _aio2.sleep(1.5)
-                        from lava_payments import get_payment_link
-                        _link = get_payment_link(user_id)
-                        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-                        _pay_kb = InlineKeyboardMarkup([[
-                            InlineKeyboardButton("💳 Оформить подписку", url=_link)
-                        ]] if _link else [])
+                        from lava_payments import get_payment_link as _gpl
+                        from telegram import InlineKeyboardMarkup as _IKM, InlineKeyboardButton as _IKB
+                        _link = _gpl(user_id)
+                        _pay_kb = _IKM([[_IKB("💳 Оформить подписку", url=_link)]] if _link else [])
                         await update.effective_chat.send_message(
-                            "Ты уже создала 3 материала — это хороший результат.\n\n"
-                            "Триал заканчивается. Хочешь продолжить без ограничений?",
+                            "Уже 3 материала — продолжаем?\n\n"
+                            "Триал скоро закончится. Оформи подписку и не потеряй всё что создала.",
                             reply_markup=_pay_kb,
                         )
             except Exception:
@@ -836,7 +826,7 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             await handle_voice_feedback_yes(update, user_id, result_id)
             # Ставим ❤️ в ответ на нажатие — живое ощущение диалога
             from ui.media import react_to_voice_feedback
-            await react_to_voice_feedback(update, context.bot)
+            await react_to_voice_feedback(update, ctx.bot)
             # Level-up GIF если достигли уровня
             try:
                 from voice_learner import get_voice_stats
