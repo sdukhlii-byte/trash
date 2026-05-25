@@ -440,10 +440,10 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await carousel.car_start(update, user_id)
         return
 
-    if data == "car_headlines":
+    if data == "car_generate":
         s = await get_agent_session(user_id, _CAR_KEY)
         if s:
-            await carousel.car_gen_headlines(update, user_id, s)
+            await carousel.car_generate(update, user_id, s)
         else:
             await carousel.car_start(update, user_id)
         return
@@ -457,46 +457,56 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await carousel.car_pick(update, user_id)
         return
 
-    if data == "car_generate":
-        s = await get_agent_session(user_id, _CAR_KEY)
-        if s:
-            await carousel.car_generate(update, user_id, s)
-        else:
-            await carousel.car_start(update, user_id)
+    # ── Панель доработки карусели ─────────────────────────────────────────────
+
+    if data == "car_edit_headline":
+        await carousel.car_edit_headline(update, user_id)
+        return
+
+    if data == "car_edit_add_slide":
+        await carousel.car_edit_add_slide(update, user_id)
+        return
+
+    if data == "car_edit_shorten":
+        await carousel.car_edit_shorten(update, user_id)
+        return
+
+    if data == "car_edit_softer":
+        await carousel.car_edit_softer(update, user_id)
+        return
+
+    if data == "car_edit_bolder":
+        await carousel.car_edit_bolder(update, user_id)
+        return
+
+    if data == "car_edit_trigger":
+        await carousel.car_edit_trigger(update, user_id)
+        return
+
+    if data == "car_edit_format":
+        await carousel.car_edit_format(update, user_id)
+        return
+
+    if data == "car_edit_back":
+        await carousel.car_edit_back(update, user_id)
+        return
+
+    if data.startswith("car_fmt_"):
+        fmt_key = data[8:]
+        await carousel.car_apply_format(update, user_id, fmt_key)
+        return
+
+    if data.startswith("car_trig_"):
+        trig_key = data[9:]
+        await carousel.car_apply_trigger(update, user_id, trig_key)
         return
 
     if data.startswith("cfmt_"):
-        fmt = data[5:]
-        if fmt in CAROUSEL_FORMATS_4:
-            s = await get_agent_session(user_id, _CAR_KEY)
-            if s:
-                await carousel.car_format_chosen(update, user_id, fmt, s)
-        return
-
-    if data == "carousel_fmt_back":
-        s = await get_agent_session(user_id, _CAR_KEY)
-        if s:
-            s["step"] = "pick_format"
-            await save_agent_session(user_id, _CAR_KEY, s)
-            await edit(query, "Выбери формат 👇", reply_markup=carousel_format_kb())
+        await carousel.car_apply_format(update, user_id, data[5:])
         return
 
     if data.startswith("ctrig_"):
-        trigger = data[6:]
-        if trigger in CAROUSEL_TRIGGERS_20:
-            s = await get_agent_session(user_id, _CAR_KEY)
-            if s:
-                await carousel.car_trigger_chosen(update, user_id, trigger, s)
-        return
-
-    if data == "car_fmt_back_to_trigger":
-        s = await get_agent_session(user_id, _CAR_KEY)
-        if s:
-            s["step"] = "pick_trigger"
-            await save_agent_session(user_id, _CAR_KEY, s)
-            await edit(query, "Выбери триггер 👇", reply_markup=carousel_trigger_kb())
-        else:
-            await carousel.car_start(update, user_id)
+        await carousel.car_apply_trigger(update, user_id, data[6:])
         return
 
     # ── Быстрые идеи ──────────────────────────────────────────────────────────
