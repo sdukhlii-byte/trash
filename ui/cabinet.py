@@ -32,9 +32,10 @@ async def show_cabinet(update: Update, user_id: int) -> None:
     examples = await get_style_examples(user_id)
     ex_count = len(examples)
 
-    # Твой стиль — полный прогресс-бар
+    # Твой стиль — единый нарратив через home._voice_level_label
     from voice_learner import get_voice_stats
-    from ui.progress_bar import voice_progress, trial_urgency
+    from ui.progress_bar import voice_progress
+    from ui.home import _voice_level_label  # единый источник меток уровня
     try:
         vs = await get_voice_stats(user_id)
         voice_line = f"\n\n{voice_progress(vs.get('total_signals', 0))}"

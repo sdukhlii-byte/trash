@@ -1,19 +1,12 @@
 """
 ui/home.py — персонализированный домашний экран.
 
-Вместо «Что делаем? 👇» + 14 кнопок — экран который показывает:
-• стрик (сколько дней подряд создаётся контент)
-• общий прогресс (сколько создано)
-• превью последнего результата
-• состояние голоса Миры (сколько сигналов накоплено)
-
-Это создаёт идентичность и ощущение роста — ключевые для retention.
-
-Правило: показываем персональный экран если у пользователя >= 2 результатов.
-Иначе — обычное меню (чтобы не пугать новых пользователей статистикой нуля).
+v3: дашборд-стиль. Единый нарратив стиля через progress_bar.
+Убрано несоответствие «учусь» vs «знакомлюсь» — всё идёт через
+voice_level_label() из progress_bar, один источник правды.
 """
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from telegram import Update
 
@@ -27,7 +20,6 @@ _STREAK_KEY = "__content_streak__"
 
 
 async def _get_streak(user_id: int) -> int:
-    """Считает стрик: сколько дней подряд создавался контент."""
     try:
         raw = await kv_get(user_id, _STREAK_KEY)
         if raw:
@@ -39,16 +31,15 @@ async def _get_streak(user_id: int) -> int:
             if diff == 0:
                 return streak
             elif diff == 1:
-                return streak  # ещё не обновлялся сегодня — сохраняем
+                return streak
             else:
-                return 0  # стрик сломан
+                return 0
     except Exception:
         pass
     return 0
 
 
 async def _update_streak(user_id: int) -> int:
-    """Обновляет стрик при генерации. Возвращает новое значение."""
     import json
     try:
         today = datetime.now(timezone.utc)
@@ -59,7 +50,7 @@ async def _update_streak(user_id: int) -> int:
             streak = data.get("streak", 1)
             diff = (today.date() - last_date.date()).days
             if diff == 0:
-                return streak  # уже обновляли сегодня
+                return streak
             elif diff == 1:
                 streak += 1
             else:
@@ -77,15 +68,40 @@ async def _update_streak(user_id: int) -> int:
 
 
 async def update_streak_on_result(user_id: int) -> None:
-    """Вызывается при каждом save_result. Обновляет стрик."""
     await _update_streak(user_id)
 
 
+# ── Единый источник правды для уровня стиля ───────────────────────────────────
+
+def _voice_level_label(n: int) -> str:
+    """Короткая метка уровня — используется и в home, и в cabinet."""
+    if n == 0:   return "не изучен"
+    if n < 5:    return "знакомлюсь"
+    if n < 10:   return "узнаю тебя"
+    if n < 20:   return "пишу как ты"
+    return "точно ✨"
+
+
+def _voice_bar_emoji(n: int) -> str:
+    """Эмодзи-бар для блока стиля в дашборде."""
+    from ui.progress_bar import _bar
+    if n == 0:
+        return "🤍🤍🤍🤍🤍"
+    elif n < 5:
+        return _bar(n, 5, "pink", width=5)
+    elif n < 10:
+        filled = "🟣" * 5
+        rest   = _bar(n - 5, 5, "purple", width=5)
+        return f"{filled} {rest}"
+    elif n < 20:
+        return "🟣🟣🟣🟣🟣 🟡🟡🟡🟡🟡"
+    else:
+        return "🟢🟢🟢🟢🟢"
+
+
+# ── Главный экран ─────────────────────────────────────────────────────────────
+
 async def show_home(update: Update, user_id: int) -> None:
-    """
-    Персональный домашний экран с живым голосом Миры.
-    Приветствие по времени суток, цветные прогресс-бары, живые промпты.
-    """
     from ui.menu import show_menu
 
     try:
@@ -102,13 +118,12 @@ async def show_home(update: Update, user_id: int) -> None:
         voice_sig = voice_s.get("total_signals", 0)
 
         from ui.mira_voice import menu_prompt
-        from ui.progress_bar import _bar, materials_count
         from db import get_user_name
         _uname = await get_user_name(user_id)
 
         lines = []
 
-        # Стрик с эмоцией
+        # ── Шапка: стрик ──────────────────────────────────────────────────────
         if streak >= 7:
             lines.append(f"🔥🔥 *{streak} дней подряд* — это уже привычка!")
         elif streak >= 3:
@@ -116,35 +131,42 @@ async def show_home(update: Update, user_id: int) -> None:
         elif streak >= 1:
             lines.append(f"📅 {streak} {'день' if streak == 1 else 'дня'} подряд")
 
-        # Прогресс с баром
+        # ── Блок 1: материалы ─────────────────────────────────────────────────
+        from ui.progress_bar import materials_count
         mat_bar = materials_count(total)
         lines.append(f"\n✅ {mat_bar}")
 
-        # Твой стиль — цветной бар
-        if voice_sig == 0:
-            lines.append("🎤 Твой стиль: 🤍🤍🤍🤍🤍 _оцени результат или добавь примеры своих постов — начну писать как ты_")
-        elif voice_sig < 5:
-            bar = _bar(voice_sig, 5, "pink", width=5)
-            lines.append(f"🎤 Твой стиль: {bar} {voice_sig}/5 — учусь")
-        elif voice_sig < 10:
-            bar = _bar(voice_sig - 5, 5, "purple", width=5)
-            lines.append(f"🎤 Твой стиль: 🟣🟣🟣🟣🟣 {bar} — узнаю тебя")
-        elif voice_sig < 20:
-            lines.append("🎤 Твой стиль: 🟣🟣🟣🟣🟣 🟡🟡🟡🟡🟡 — пишу как ты 🎯")
-        else:
-            lines.append("🎤 Твой стиль: 🟢🟢🟢🟢🟢 — *точно* ✨")
+        # ── Блок 2: стиль — единый нарратив через _voice_level_label ─────────
+        bar   = _voice_bar_emoji(voice_sig)
+        level = _voice_level_label(voice_sig)
 
-        # Последний результат
+        if voice_sig == 0:
+            lines.append(
+                f"🎤 *Твой стиль:* {bar}\n"
+                "_Оцени результат — и я начну запоминать как ты пишешь_"
+            )
+        elif voice_sig < 5:
+            left = 5 - voice_sig
+            lines.append(
+                f"🎤 *Твой стиль:* {bar} {voice_sig}/5 — {level}\n"
+                f"_ещё {left} {'оценка' if left == 1 else 'оценки'}, и начну попадать стабильно_"
+            )
+        elif voice_sig < 10:
+            lines.append(f"🎤 *Твой стиль:* {bar} — {level}")
+        else:
+            lines.append(f"🎤 *Твой стиль:* {bar} — *{level}* 🎯")
+
+        # ── Блок 3: последний результат ───────────────────────────────────────
         if results:
             r       = results[0]
-            preview = r["content"][:100].replace("\n", " ").strip()
+            preview = r["content"][:120].replace("\n", " ").strip()
             ts      = r["ts"][:10] if r.get("ts") else ""
             lines.append(
-                f"\n*Последнее:* {r['agent_name']} {ts}\n"
-                f"_{preview}..._"
+                f"\n┌ *{r['agent_name']}* {ts}\n"
+                f"└ _{preview}…_"
             )
 
-        # Живой промпт вместо "Что делаем? 👇"
+        # ── CTA ───────────────────────────────────────────────────────────────
         lines.append(f"\n{menu_prompt(name=_uname)}")
 
         await send(
@@ -154,7 +176,6 @@ async def show_home(update: Update, user_id: int) -> None:
             reply_markup=_home_kb(total, voice_sig),
         )
 
-        # GIF на 7-дневный стрик
         if streak == 7:
             from ui.media import send_gif
             await send_gif(update, "streak_7")
@@ -172,7 +193,6 @@ def _home_kb(total: int, voice_signals: int):
         ["🧩 Все инструменты|menu_more"],
     ]
 
-    # Если голос не настроен — первой кнопкой ставим Style
     if voice_signals < 3:
         rows.insert(0, ["🎤 Научить Миру моему стилю|style_menu"])
 
