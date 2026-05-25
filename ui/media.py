@@ -91,13 +91,30 @@ async def set_reaction(bot, chat_id: int, message_id: int, emoji: str = "❤") -
 
 
 async def react_to_voice_feedback(update, bot) -> None:
-    """Ставит ❤️ когда пользователь нажал 'Звучит как я'."""
+    """
+    Ставит ❤️ на последнее сообщение пользователя в чате.
+    Нельзя ставить реакцию на сообщения самого бота — только на сообщения юзера.
+    """
     try:
-        msg = update.callback_query.message if update.callback_query else None
-        if msg:
-            await set_reaction(bot, msg.chat_id, msg.message_id, "❤")
-    except Exception:
-        pass
+        query = update.callback_query
+        if not query:
+            return
+        chat_id = query.message.chat_id
+        # Ищем последнее сообщение пользователя — оно на 1-2 позиции выше сообщения с кнопками
+        # callback_query.message — сообщение с кнопками (бот)
+        # Нам нужен message_id на несколько меньше — сообщение юзера
+        # Самый надёжный способ: ставим реакцию на само сообщение с кнопками
+        # если Telegram разрешает (в некоторых версиях API да), иначе тихо падаем
+        msg_id = query.message.message_id
+        # Пробуем на текущее, потом на предыдущее
+        for candidate_id in [msg_id, msg_id - 1, msg_id - 2]:
+            try:
+                await set_reaction(bot, chat_id, candidate_id, "❤")
+                return
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f"[media] react_to_voice_feedback failed: {e}")
 
 
 # ── Форматирование результатов ────────────────────────────────────────────────

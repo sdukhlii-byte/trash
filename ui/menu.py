@@ -59,12 +59,15 @@ async def show_menu(update: Update, user_id: int) -> None:
     НЕ трогает агент-сессии.
     """
     stored_raw = await kv_get(user_id, "__menu_msg_id__")
+    from ui.mira_voice import menu_prompt
+    prompt = menu_prompt()
+
     if stored_raw:
         try:
             await update.effective_chat.bot.edit_message_text(
                 chat_id=update.effective_chat.id,
                 message_id=int(stored_raw),
-                text="Что делаем? 👇",
+                text=prompt,
                 reply_markup=main_menu_kb(),
             )
             return
@@ -72,7 +75,7 @@ async def show_menu(update: Update, user_id: int) -> None:
             pass
 
     sent = await update.effective_chat.send_message(
-        "Что делаем? 👇", reply_markup=main_menu_kb()
+        prompt, reply_markup=main_menu_kb()
     )
     await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
 
@@ -80,7 +83,9 @@ async def show_menu(update: Update, user_id: int) -> None:
 async def show_more_menu(update, query) -> None:
     """Расширенное меню — вызывается по кнопке 'Ещё инструменты'."""
     from utils import edit
-    await edit(query, "Все инструменты 👇", reply_markup=more_menu_kb())
+    import random
+    prompts = ["Все инструменты 👇", "Выбирай 👇", "Что ещё? 👇"]
+    await edit(query, random.choice(prompts), reply_markup=more_menu_kb())
 
 
 async def maybe_show_resume_banner(update: Update, user_id: int) -> bool:
@@ -100,17 +105,21 @@ async def maybe_show_resume_banner(update: Update, user_id: int) -> bool:
     step = session.get("step", "")
     if step in ("initial", "interview", "pick", "await_photos", "await_details_text"):
         import agents as ag
+        import random
         spec = ag.get_spec(active)
         name = spec.name if spec else active
+        prompts = [
+            f"⏸ У тебя незакрытый разговор про *{name}*\n\nПродолжим или начнём что-то новое?",
+            f"⏸ Мы не закончили с *{name}*\n\nВернёмся?",
+            f"⏸ *{name}* ждёт — я запомнила где остановились\n\nПродолжим?",
+        ]
         await send(
             update,
-            f"⏸ *У тебя незавершённая работа*\n\n"
-            f"_{name}_ — вопросы ещё не закончены.\n\n"
-            f"Продолжить или начать новую задачу?",
+            random.choice(prompts),
             parse_mode="Markdown",
             reply_markup=kb(
-                [f"🔙 Продолжить {name}|resume_agent_{active}"],
-                ["🆕 Начать новую задачу|menu_main_clear"],
+                [f"→ Продолжить {name}|resume_agent_{active}"],
+                ["✨ Начать новое|menu_main_clear"],
             ),
         )
         return True

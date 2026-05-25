@@ -52,8 +52,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await clear_onboarding_state(user_id)
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
+
+        # Живое первое сообщение с приветствием по времени суток
+        from ui.mira_voice import greet
+        first_name = update.effective_user.first_name or ""
+        greeting   = greet(first_name)
         from config import MIRA_INTRO
-        await send(update, MIRA_INTRO)
+        intro = f"{greeting}\n\n{MIRA_INTRO}"
+        await send(update, intro)
         await onb_next(update, user_id, new_state)
         return
 

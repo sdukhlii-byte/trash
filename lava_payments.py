@@ -826,12 +826,15 @@ async def render_status(user_id: int) -> str:
     trial = await get_trial(user_id)
     if trial:
         exp = datetime.fromisoformat(trial["expires_at"])
-        days_left = max(0, (exp - now).days)
-        hours_left = max(0, int((exp - now).total_seconds() / 3600))
+        days_left  = max(0, (exp - now).days)
+        hours_left = max(0, (exp - now).total_seconds() / 3600)
+        from ui.progress_bar import trial_urgency
+        urgency_bar = trial_urgency(hours_left)
         return (
             f"🔓 *Пробный период*\n\n"
-            f"Осталось: {days_left} дн. ({hours_left} ч.)\n"
+            f"Осталось: {days_left} дн. ({round(hours_left)} ч.)\n"
             f"Действует до: {exp.strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"{urgency_bar}\n\n"
             f"_Оформи подписку чтобы сохранить доступ_ 👇"
         )
 

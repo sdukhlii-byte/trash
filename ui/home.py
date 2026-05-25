@@ -83,57 +83,67 @@ async def update_streak_on_result(user_id: int) -> None:
 
 async def show_home(update: Update, user_id: int) -> None:
     """
-    Показывает домашний экран.
-    Если < 2 результатов — обычное меню.
+    Персональный домашний экран с живым голосом Миры.
+    Приветствие по времени суток, цветные прогресс-бары, живые промпты.
     """
     from ui.menu import show_menu
 
     try:
-        stats      = await get_stats(user_id)
-        total      = stats.get("total", 0)
+        stats   = await get_stats(user_id)
+        total   = stats.get("total", 0)
 
         if total < 2:
             await show_menu(update, user_id)
             return
 
-        results    = await get_results(user_id, limit=1)
-        streak     = await _get_streak(user_id)
-        voice_s    = await get_voice_stats(user_id)
-        voice_sig  = voice_s.get("total_signals", 0)
+        results   = await get_results(user_id, limit=1)
+        streak    = await _get_streak(user_id)
+        voice_s   = await get_voice_stats(user_id)
+        voice_sig = voice_s.get("total_signals", 0)
 
-        # Строим персональный экран
+        from ui.mira_voice import menu_prompt
+        from ui.progress_bar import _bar, materials_count
+
         lines = []
 
-        # Стрик
-        if streak >= 3:
-            lines.append(f"🔥 *{streak} дней подряд* — так держать!")
+        # Стрик с эмоцией
+        if streak >= 7:
+            lines.append(f"🔥🔥 *{streak} дней подряд* — это уже привычка!")
+        elif streak >= 3:
+            lines.append(f"🔥 *{streak} дня подряд* — ты в ритме!")
         elif streak >= 1:
-            lines.append(f"📅 Создаёшь контент {streak} {'день' if streak == 1 else 'дня'} подряд")
+            lines.append(f"📅 {streak} {'день' if streak == 1 else 'дня'} подряд")
 
-        # Общий прогресс
-        lines.append(f"\n✅ Создано материалов: *{total}*")
+        # Прогресс с баром
+        mat_bar = materials_count(total)
+        lines.append(f"\n✅ {mat_bar}")
 
-        # Состояние голоса
+        # Голос — цветной бар
         if voice_sig == 0:
-            lines.append("🎤 Голос Миры: _не настроен_ — после генерации оцени результат")
-        elif voice_sig < 3:
-            lines.append(f"🎤 Голос Миры: _настраивается_ ({voice_sig}/5 сигналов)")
-        elif voice_sig < 7:
-            lines.append(f"🎤 Голос Миры: _хорошо_ ({voice_sig} сигналов)")
+            lines.append("🎤 Голос Миры: 🤍🤍🤍🤍🤍 _оцени результат — начну запоминать_")
+        elif voice_sig < 5:
+            bar = _bar(voice_sig, 5, "pink", width=5)
+            lines.append(f"🎤 Голос Миры: {bar} {voice_sig}/5 — настраивается")
+        elif voice_sig < 10:
+            bar = _bar(voice_sig - 5, 5, "purple", width=5)
+            lines.append(f"🎤 Голос Миры: 🟣🟣🟣🟣🟣 {bar} — стабильный")
+        elif voice_sig < 20:
+            lines.append("🎤 Голос Миры: 🟣🟣🟣🟣🟣 🟡🟡🟡🟡🟡 — точный 🎯")
         else:
-            lines.append(f"🎤 Голос Миры: *точный* ({voice_sig} сигналов) 🎯")
+            lines.append("🎤 Голос Миры: 🟢🟢🟢🟢🟢 — *идеальный* ✨")
 
-        # Последний результат — превью
+        # Последний результат
         if results:
-            r = results[0]
-            preview = r["content"][:120].replace("\n", " ")
+            r       = results[0]
+            preview = r["content"][:100].replace("\n", " ").strip()
             ts      = r["ts"][:10] if r.get("ts") else ""
             lines.append(
-                f"\n*Последнее:* {r['agent_name']} [{ts}]\n"
+                f"\n*Последнее:* {r['agent_name']} {ts}\n"
                 f"_{preview}..._"
             )
 
-        lines.append("\nЧто делаем сегодня?")
+        # Живой промпт вместо "Что делаем? 👇"
+        lines.append(f"\n{menu_prompt()}")
 
         await send(
             update,
@@ -142,9 +152,15 @@ async def show_home(update: Update, user_id: int) -> None:
             reply_markup=_home_kb(total, voice_sig),
         )
 
+        # GIF на 7-дневный стрик
+        if streak == 7:
+            from ui.media import send_gif
+            await send_gif(update, "streak_7")
+
     except Exception as e:
         logger.error(f"show_home error: {e}")
-        await show_menu(update, user_id)
+        from ui.menu import show_menu as _sm
+        await _sm(update, user_id)
 
 
 def _home_kb(total: int, voice_signals: int):
