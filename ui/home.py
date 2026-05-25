@@ -120,19 +120,19 @@ async def show_home(update: Update, user_id: int) -> None:
         mat_bar = materials_count(total)
         lines.append(f"\n✅ {mat_bar}")
 
-        # Голос — цветной бар
+        # Твой стиль — цветной бар
         if voice_sig == 0:
-            lines.append("🎤 Голос Миры: 🤍🤍🤍🤍🤍 _оцени результат или добавь примеры своих постов — начну запоминать_")
+            lines.append("🎤 Твой стиль: 🤍🤍🤍🤍🤍 _оцени результат или добавь примеры своих постов — начну писать как ты_")
         elif voice_sig < 5:
             bar = _bar(voice_sig, 5, "pink", width=5)
-            lines.append(f"🎤 Голос Миры: {bar} {voice_sig}/5 — настраивается")
+            lines.append(f"🎤 Твой стиль: {bar} {voice_sig}/5 — учусь")
         elif voice_sig < 10:
             bar = _bar(voice_sig - 5, 5, "purple", width=5)
-            lines.append(f"🎤 Голос Миры: 🟣🟣🟣🟣🟣 {bar} — стабильный")
+            lines.append(f"🎤 Твой стиль: 🟣🟣🟣🟣🟣 {bar} — узнаю тебя")
         elif voice_sig < 20:
-            lines.append("🎤 Голос Миры: 🟣🟣🟣🟣🟣 🟡🟡🟡🟡🟡 — точный 🎯")
+            lines.append("🎤 Твой стиль: 🟣🟣🟣🟣🟣 🟡🟡🟡🟡🟡 — пишу как ты 🎯")
         else:
-            lines.append("🎤 Голос Миры: 🟢🟢🟢🟢🟢 — *идеальный* ✨")
+            lines.append("🎤 Твой стиль: 🟢🟢🟢🟢🟢 — *точно* ✨")
 
         # Последний результат
         if results:
@@ -174,7 +174,7 @@ def _home_kb(total: int, voice_signals: int):
 
     # Если голос не настроен — первой кнопкой ставим Style
     if voice_signals < 3:
-        rows.insert(0, ["🎤 Настроить мой голос|style_menu"])
+        rows.insert(0, ["🎤 Научить Миру моему стилю|style_menu"])
 
     rows += [
         ["📚 Мои материалы|my_results",           "📈 Прогресс|my_stats"],

@@ -736,7 +736,7 @@ async def _notify_user(bot: Bot, user_id: int, tier: str, event_type: str) -> No
             f"Тариф: {label}\n"
             f"Действует до: {expires_str}\n\n"
             f"Теперь у тебя полный доступ.\n"
-            f"Голос Миры уже знает твою нишу — можно сразу писать.\n\n"
+            f"Я уже знаю твою нишу — можно сразу писать.\n\n"
             f"Нажми кнопку ниже или напиши тему поста 👇"
         )
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton

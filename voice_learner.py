@@ -327,13 +327,13 @@ async def handle_voice_feedback_yes(
     hint = voice_progress_short(total)
 
     if total >= 10:
-        msg = f"✅ Записала — голос на уровне «Точный» ({total} сигналов). 🎯{hint}"
+        msg = f"✅ Запомнила. Теперь пишу точно в твоём стиле ({total} примеров). 🎯{hint}"
     elif total >= 5:
-        msg = f"✅ Записала этот стиль.{hint}"
+        msg = f"✅ Запомнила — учту в следующем тексте.{hint}"
     elif total >= 2:
-        msg = f"✅ Записала.{hint}"
+        msg = f"✅ Запомнила.{hint}"
     else:
-        msg = f"✅ Записала твой голос.{hint}"
+        msg = f"✅ Запомнила — это мой первый ориентир по твоему стилю.{hint}"
 
     await send(update, msg, parse_mode="Markdown",
                reply_markup=kb(["← Меню|menu_main"]))
@@ -349,7 +349,7 @@ async def handle_voice_feedback_no(
     await kv_set(user_id, _FEEDBACK_STEP_KEY, str(result_id), ttl=600)
     await send(
         update,
-        "Понятно. Что именно не так?\n\n"
+        "Понятно, поправлю. Что именно не похоже на тебя?\n\n"
         "_Напиши одним предложением — например: «слишком официально», "
         "«длинные абзацы», «без юмора»_",
         parse_mode="Markdown",
@@ -389,7 +389,7 @@ async def handle_voice_note_text(
 
     await send(
         update,
-        f"✅ Записала: «{text[:80]}»{progress}\n\n_Учту в следующих генерациях._",
+        f"✅ Поняла: «{text[:80]}»{progress}\n\n_Следующий текст напишу иначе._",
         parse_mode="Markdown",
         reply_markup=kb(["← Меню|menu_main"]),
     )

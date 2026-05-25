@@ -770,13 +770,13 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                     _vs    = await _gvs(user_id)
                     _total = _vs.get("total_signals", 0)
                     if _total == 0:
-                        _hint = "\n\n_Оцени — и Мира запомнит твой стиль._"
+                        _hint = "\n\n_Оцени — и я запомню как ты пишешь._"
                     elif _total < 5:
                         _filled = "▓" * _total
                         _empty  = "░" * (5 - _total)
-                        _hint   = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5_"
+                        _hint   = f"\n\n_Учу твой стиль: [{_filled}{_empty}] {_total}/5_"
                     else:
-                        _hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов) 🎯_"
+                        _hint = f"\n\n_Пишу как ты: точно ({_total} примеров) 🎯_"
                 except Exception:
                     _hint = ""
                 await send(update, f"Звучит как твой голос?{_hint}",

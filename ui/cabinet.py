@@ -32,7 +32,7 @@ async def show_cabinet(update: Update, user_id: int) -> None:
     examples = await get_style_examples(user_id)
     ex_count = len(examples)
 
-    # Голос Миры — полный прогресс-бар
+    # Твой стиль — полный прогресс-бар
     from voice_learner import get_voice_stats
     from ui.progress_bar import voice_progress, trial_urgency
     try:

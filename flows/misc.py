@@ -113,10 +113,10 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
                 if _total < 5:
                     _filled = "▓" * _total if _total else ""
                     _empty  = "░" * (5 - _total)
-                    _hint   = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5_" if _total else \
-                              "\n\n_Оцени — и Мира запомнит твой стиль._"
+                    _hint   = f"\n\n_Учу твой стиль: [{_filled}{_empty}] {_total}/5_" if _total else \
+                              "\n\n_Оцени — и я запомню как ты пишешь._"
                 else:
-                    _hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов) 🎯_"
+                    _hint = f"\n\n_Пишу как ты: точно ({_total} примеров) 🎯_"
                 await send(update, f"Звучит как твой голос?{_hint}",
                            parse_mode="Markdown",
                            reply_markup=voice_feedback_kb(_recent[0]["id"]))
@@ -389,12 +389,12 @@ async def show_stats(update: Update, user_id: int) -> None:
 
         # Voice calibration
         if voice_sig == 0:
-            lines.append("🎤 Голос Миры: _не настроен_ — после генерации появится кнопка оценки")
+            lines.append("🎤 Твой стиль: _ещё не изучен_ — после генерации появится кнопка оценки")
         elif voice_sig < 5:
             bar = "▓" * voice_sig + "░" * (5 - voice_sig)
-            lines.append(f"🎤 Голос Миры: [{bar}] {voice_sig}/5")
+            lines.append(f"🎤 Твой стиль: [{bar}] {voice_sig}/5 — учусь")
         else:
-            lines.append(f"🎤 Голос Миры: *точный* ({voice_sig} сигналов) 🎯")
+            lines.append(f"🎤 Твой стиль: *пишу как ты* ({voice_sig} примеров) 🎯")
 
         if stats["by_agent"]:
             lines.append("\n*По инструментам:*")
