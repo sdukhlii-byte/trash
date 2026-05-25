@@ -62,11 +62,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if state == UserState.SUBSCRIBED:
-        p = await get_profile(user_id)
-        from utils import profile_val
-        niche    = profile_val(p, "niche")
-        audience = profile_val(p, "audience")
-        caption  = f"С возвращением.\n\nНиша: {niche} · Аудитория: {audience}\n\nЧто делаем?"
         await show_home(update, user_id)
         return
 

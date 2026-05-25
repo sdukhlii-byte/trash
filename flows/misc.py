@@ -82,6 +82,13 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
         parse_mode="Markdown",
         reply_markup=kb(["🔄 Ещё 10 идей|quick_ideas", "← Меню|menu_main"]),
     )
+    # Стрик
+    try:
+        from ui.home import update_streak_on_result as _usr
+        await _usr(user_id)
+    except Exception:
+        pass
+
     # Voice feedback — узнаём звучит ли как автор
     try:
         import asyncio
@@ -156,6 +163,13 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
             ["← Меню|menu_main"],
         ),
     )
+    # Стрик
+    try:
+        from ui.home import update_streak_on_result as _usr
+        await _usr(user_id)
+    except Exception:
+        pass
+    # Voice feedback
     try:
         import asyncio
         from db import get_results as _gr
@@ -198,6 +212,12 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
         return
     try:
         await save_result(user_id, r["agent_key"], r["agent_name"], result)
+    except Exception:
+        pass
+    # Стрик
+    try:
+        from ui.home import update_streak_on_result as _usr
+        await _usr(user_id)
     except Exception:
         pass
     await send(

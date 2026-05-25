@@ -209,10 +209,7 @@ async def main() -> None:
 
     # Follow-up jobs — не восстанавливаем при рестарте (TTL 72h, Railway перезапускается редко)
     # Новые followup планируются при каждом save_result() через ptb_app
-    try:
-        logger.info("Follow-up system ready (scheduled per-generation)")
-    except Exception as e:
-        logger.warning(f"Retention push schedule failed: {e}")
+    logger.info("Follow-up system ready (scheduled per-generation)")
 
     # 7. Webhook или polling
     port = int(os.environ.get("PORT", 8080))

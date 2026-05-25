@@ -595,6 +595,13 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
         ),
     )
 
+    # Стрик
+    try:
+        from ui.home import update_streak_on_result as _usr
+        await _usr(user_id)
+    except Exception:
+        pass
+
     # Кнопка голосового фидбека — ключевой differentiator
     if _result_id:
         import asyncio

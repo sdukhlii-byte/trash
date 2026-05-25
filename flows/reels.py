@@ -206,6 +206,25 @@ async def rs_generate(update: Update, user_id: int, s: dict) -> None:
     )
 
     # Мягкий upsell для триал-пользователей
+    # Voice feedback
+    try:
+        import asyncio as _asyncio
+        from db import get_results as _gr
+        _recent = await _gr(user_id, limit=1)
+        if _recent:
+            await _asyncio.sleep(0.5)
+            await send(update, "Звучит как твой голос?",
+                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+    except Exception:
+        pass
+
+    # Стрик
+    try:
+        from ui.home import update_streak_on_result as _usr
+        await _usr(user_id)
+    except Exception:
+        pass
+
     from ui.cabinet import maybe_show_upsell
     await maybe_show_upsell(update, user_id)
 
