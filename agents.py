@@ -263,7 +263,7 @@ async def _first_message(update: Update, user_id: int,
     except Exception as e:
         logger.error(f"[{spec.key}] first_message LLM error: {e}")
         await safe_delete(status)
-        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
+        await send(update, "Связь прервалась — ответь ещё раз, данные сохранены 🔁",
                    reply_markup=kb([f"🔁 Попробовать снова|agent_restart_{spec.key}",
                                     "← Меню|menu_main"]))
         return
@@ -294,7 +294,7 @@ async def _interview_step(update: Update, user_id: int,
     except Exception as e:
         logger.error(f"[{spec.key}] interview LLM error: {e}")
         ih.pop()
-        await send(update, "Связь прервалась — ответь ещё раз 🔁",
+        await send(update, "Связь прервалась — ответь ещё раз и продолжим 🔁",
                    reply_markup=kb(["⏭ Пропустить вопросы|agent_skip", "← Меню|menu_main"]))
         return
 
@@ -343,9 +343,10 @@ async def _gen_variants(update: Update, user_id: int,
     try:
         profile    = await get_profile(user_id)
         sys_prompt = await _resolve_generator_custom(user_id, spec, session, profile)
-        result     = await generate_from_history(
+        result     = await llm.generate_with_progress(
             sys_prompt, session["history"],
             final_prompt=spec.final_prompt,
+            status_msg=status,
             model_key=spec.model,
             temperature=0.85,
             presence_penalty=0.3,
@@ -447,10 +448,11 @@ async def generate(update: Update, user_id: int,
                       + _history_to_text(session["history"]))
             result = await llm.vision_complete(sys_prompt, ctx, photos, model_key="gpt4")
         else:
-            # FIX: complete_long() для тяжёлых вызовов вместо complete()
-            result = await generate_from_history(
+            # generate_with_progress: апдейт статуса через 20с и 50с при долгих генерациях
+            result = await llm.generate_with_progress(
                 sys_prompt, session["history"],
                 final_prompt=spec.final_prompt,
+                status_msg=status,
                 model_key=spec.model,
                 temperature=0.85,
                 presence_penalty=0.3,
@@ -602,13 +604,32 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     except Exception:
         pass
 
-    # Кнопка голосового фидбека — ключевой differentiator
+    # Кнопка голосового фидбека с прогресс-баром — ключевой differentiator
     if _result_id:
         import asyncio
         await asyncio.sleep(0.5)
+        # Строим прогресс-бар голоса
+        try:
+            from voice_learner import get_voice_stats
+            _vs = await get_voice_stats(user_id)
+            _total = _vs.get("total_signals", 0)
+            if _total == 0:
+                _voice_hint = "\n\n_Оцени — и Мира начнёт запоминать твой стиль._"
+            elif _total < 5:
+                _filled = "▓" * _total
+                _empty  = "░" * (5 - _total)
+                _voice_hint = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5 — ещё {5 - _total} и попадание в твой стиль станет стабильным._"
+            elif _total < 10:
+                _voice_hint = f"\n\n_Голос Миры: точный ({_total} сигналов) — тексты становятся лучше с каждой оценкой._ 🎯"
+            else:
+                _voice_hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов). Каждая оценка делает его ещё точнее._ 🎯"
+        except Exception:
+            _voice_hint = ""
+
         await send(
             update,
-            "Звучит как твой голос?",
+            f"Звучит как твой голос?{_voice_hint}",
+            parse_mode="Markdown",
             reply_markup=voice_feedback_kb(_result_id),
         )
 

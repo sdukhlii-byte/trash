@@ -137,14 +137,18 @@ async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
     if _data.get("niche"):
         try:
             _status = await update.effective_chat.send_message(
-                "Записала всё — дай секунду, кое-что покажу 👇"
+                "Записала всё — секунду, пишу первый пример 👇"
             )
+            # Генерируем полноценный короткий пост, а не просто 3 строчки
             _prompt = (
                 f"Ниша: {_data['niche']}\n"
                 f"Аудитория: {_data.get('audience', '')}\n"
                 f"Тон: {_data.get('tone', '')}\n\n"
-                "Дай ровно 3 конкретные идеи для постов — по одной строке с номером. "
-                "Только список, без вступлений."
+                "Напиши один короткий живой пост для Instagram (150-250 слов).\n"
+                "Начни с сильного хука — первая строка останавливает скролл.\n"
+                "Пиши в голосе автора, не как шаблон.\n"
+                "В конце — один открытый вопрос к аудитории.\n"
+                "Только текст поста, без пояснений."
             )
             _sys = protect(user_id, await get_prompt(user_id, "quick_ideas", QUICK_IDEAS_SYSTEM))
             _preview = await complete(_sys, _prompt, temperature=0.85)
@@ -162,7 +166,8 @@ async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
     if _preview:
         await send(
             update,
-            f"*Записала.*\n\nВот три идеи для постов под твою нишу:\n\n{_preview}",
+            f"*Вот как это выглядит под твою нишу:*\n\n{_preview}\n\n"
+            f"_Это черновик за 10 секунд. Агенты делают глубже — с интервью, голосом, хуками под аудиторию._",
             parse_mode="Markdown",
         )
         await asyncio.sleep(1.2)
@@ -178,7 +183,8 @@ async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
         update,
         f"Это только начало.\n\n"
         f"Посты, рилсы, карусели, прогревы — в твоём голосе, под твою аудиторию.\n\n"
-        f"*{TRIAL_DAYS} дня бесплатно* — без карты, без подвоха.",
+        f"*{TRIAL_DAYS} дня бесплатно* — без карты, без подвоха.\n\n"
+        f"_Фрилансер-SMM берёт от 15 000 ₽/мес. Мира — от 2 800 ₽/мес, 24/7._",
         parse_mode="Markdown",
         reply_markup=kb(
             ["🎁 Активировать бесплатный доступ|sub_trial"],

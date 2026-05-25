@@ -207,6 +207,23 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Retention push schedule failed: {e}")
 
+    # 6b. Hourly conversion nudges (DB-флаги, переживают рестарты)
+    try:
+        import datetime as _dt
+        async def _run_hourly_conversion(ctx):
+            from flows.conversion import run_hourly_conversion
+            await run_hourly_conversion(ctx.bot)
+
+        ptb_app.job_queue.run_repeating(
+            callback=_run_hourly_conversion,
+            interval=3600,
+            first=300,  # первый запуск через 5 мин после старта
+            name="hourly_conversion",
+        )
+        logger.info("Hourly conversion job scheduled")
+    except Exception as e:
+        logger.warning(f"Hourly conversion job failed: {e}")
+
     # Follow-up jobs — не восстанавливаем при рестарте (TTL 72h, Railway перезапускается редко)
     # Новые followup планируются при каждом save_result() через ptb_app
     logger.info("Follow-up system ready (scheduled per-generation)")

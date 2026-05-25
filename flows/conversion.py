@@ -1,136 +1,103 @@
 """
 flows/conversion.py — конверсионная воронка.
 
+v3: Переход от in-memory job_queue к DB-флагам.
+
+Проблема оригинала: job_queue.run_once() живёт в памяти процесса.
+При рестарте Railway (деплой, краш, OOM) все запланированные нуджи теряются.
+Пользователь который прошёл онбординг за 5 минут до рестарта — никогда не
+получит Day-2 нудж. Молча. Без ошибок в логах.
+
+Решение: храним флаги в Redis (kv_set с TTL). Два APScheduler-задания
+(run_hourly_conversion, run_trial_warnings) проверяют кого уже пора нуджить.
+Это идентично паттерну в retention.py и переживает любые рестарты.
+
 Закрывает четыре главные утечки:
-
-УТЕЧКА 1: Онбординг → не нажали "активировать триал"
-  Решение: через 15 минут после онбординга — если триал не активирован,
-  отправляем конкретный пример результата под их нишу.
-
-УТЕЧКА 2: Триал день 1 → не вернулись на день 2
-  Решение: через 20 часов после активации — "вот что ты ещё не попробовала"
-  с конкретным агентом под их нишу.
-
-УТЕЧКА 3: Триал истекает — последний день
-  Решение: за 6 часов до истечения — персональное сообщение с их материалами.
-
-УТЕЧКА 4: Триал истёк → не купили
-  Решение: уже в retention.py (EXPIRED_CHAIN), но добавляем
-  тактику "ограниченного предложения" для шага 1 (48 часов).
+  УТЕЧКА 1: Онбординг → не нажали "активировать триал"
+    → run_hourly_conversion проверяет пользователей onboarded >15 мин назад без триала
+  УТЕЧКА 2: Триал день 1 → не вернулись на день 2
+    → run_hourly_conversion проверяет активных триальщиков >20ч без генерации
+  УТЕЧКА 3: Триал истекает — последний день
+    → run_trial_warnings (уже есть в retention.py) — за 24ч/6ч
+  УТЕЧКА 4: Триал истёк → не купили
+    → retention.py EXPIRED_CHAIN
 """
 import logging
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-# Ключи для отслеживания что уже отправлено
-_KEY_ONBOARDING_NUDGE   = "__cv_onb_nudge__"
-_KEY_DAY2_SENT          = "__cv_day2__"
-_KEY_LASTDAY_SENT       = "__cv_lastday__"
+# Redis-ключи (TTL-флаги вместо in-memory jobs)
+_KEY_ONBOARDING_NUDGE = "__cv_onb_nudge__"
+_KEY_DAY2_SENT        = "__cv_day2__"
+_KEY_LASTDAY_SENT     = "__cv_lastday__"
 
+# ── Утечка 1: онбординг без триала ────────────────────────────────────────────
 
-# ═══════════════════════════════════════════════════════════════════════
-# УТЕЧКА 1: Онбординг без активации триала
-# ═══════════════════════════════════════════════════════════════════════
-
-async def schedule_onboarding_nudge(app, user_id: int) -> None:
-    """
-    Планирует напоминание через 15 минут если триал не активирован.
-    Вызывать в конце _finish_onboarding() для пользователей без доступа.
-    """
-    from db import kv_get
-    try:
-        existing = await kv_get(user_id, _KEY_ONBOARDING_NUDGE)
-        if existing:
-            return  # уже запланировано
-
-        app.job_queue.run_once(
-            callback=_onboarding_nudge_job,
-            when=timedelta(minutes=15),
-            name=f"onb_nudge_{user_id}",
-            data=user_id,
-        )
-        from db import kv_set
-        await kv_set(user_id, _KEY_ONBOARDING_NUDGE, "1", ttl=86400)
-        logger.info(f"Onboarding nudge scheduled: user={user_id}")
-    except Exception as e:
-        logger.warning(f"schedule_onboarding_nudge: {e}")
-
-
-async def _onboarding_nudge_job(ctx) -> None:
-    user_id = ctx.job.data
+async def _send_onboarding_nudge(bot, user_id: int) -> None:
+    """Отправляет нудж пользователям которые прошли онбординг но не взяли триал."""
     from user_state import get_user_state, has_access
-    from db import get_profile
+    from db import get_profile, kv_set
 
     try:
         state = await get_user_state(user_id)
         if has_access(state):
-            return  # уже активировал — не беспокоим
+            return  # уже активировал
 
         profile = await get_profile(user_id)
         niche   = profile.get("niche", "твоей теме")
 
-        # Показываем конкретный пример под нишу — это и есть WOW
         from niche_intel import get_niche_intel
-        intel    = get_niche_intel(niche)
-        works    = intel.get("works", "")
-        example  = works.split("\n")[1].strip("• ").split("\n")[0] if works else "создания контента"
+        intel   = get_niche_intel(niche)
+        works   = intel.get("works", "")
+        example = works.split("\n")[1].strip("• ").split("\n")[0] if works else "создания контента"
 
         text = (
             f"Кстати.\n\n"
             f"Для твоей ниши «{niche[:30]}» лучше всего работает: {example.lower()}\n\n"
             f"Хочешь посмотреть как Мира напишет это конкретно под твою аудиторию?\n\n"
-            f"*{3} дня бесплатно — без карты.*"
+            f"*3 дня бесплатно — без карты.*"
         )
 
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-        from lava_payments import get_payment_link
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🎁 Да, показывай", callback_data="sub_trial"),
         ]])
 
-        await ctx.bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode="Markdown",
-            reply_markup=kb,
-        )
+        await bot.send_message(chat_id=user_id, text=text,
+                               parse_mode="Markdown", reply_markup=kb)
+        # Ставим флаг что отправили — больше не трогаем
+        await kv_set(user_id, _KEY_ONBOARDING_NUDGE, "sent", ttl=86400 * 7)
         from flows.utm import track_event
         await track_event(user_id, "onboarding_nudge_sent")
         logger.info(f"Onboarding nudge sent: user={user_id}")
     except Exception as e:
-        logger.warning(f"_onboarding_nudge_job failed: {e}")
+        logger.warning(f"_send_onboarding_nudge failed uid={user_id}: {e}")
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# УТЕЧКА 2: Триал день 2 — не вернулись
-# ═══════════════════════════════════════════════════════════════════════
-
-async def schedule_day2_nudge(app, user_id: int) -> None:
+async def schedule_onboarding_nudge(app, user_id: int) -> None:
     """
-    Планирует Day-2 нудж через 20 часов после активации триала.
-    Вызывать при grant_trial().
+    Регистрирует намерение отправить нудж.
+    Фактическая отправка — через run_hourly_conversion() который видит флаг.
+    Переживает рестарты: флаг в Redis, не в памяти.
     """
     from db import kv_get, kv_set
     try:
-        existing = await kv_get(user_id, _KEY_DAY2_SENT)
+        existing = await kv_get(user_id, _KEY_ONBOARDING_NUDGE)
         if existing:
             return
-
-        app.job_queue.run_once(
-            callback=_day2_nudge_job,
-            when=timedelta(hours=20),
-            name=f"day2_{user_id}",
-            data=user_id,
-        )
-        await kv_set(user_id, _KEY_DAY2_SENT, "scheduled", ttl=86400 * 4)
-        logger.info(f"Day-2 nudge scheduled: user={user_id}")
+        # Флаг "pending" с временем онбординга — job прочитает и решит когда слать
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        await kv_set(user_id, _KEY_ONBOARDING_NUDGE, f"pending:{now_ts}", ttl=86400)
+        logger.info(f"Onboarding nudge flagged: user={user_id}")
     except Exception as e:
-        logger.warning(f"schedule_day2_nudge: {e}")
+        logger.warning(f"schedule_onboarding_nudge: {e}")
 
 
-async def _day2_nudge_job(ctx) -> None:
-    user_id = ctx.job.data
+# ── Утечка 2: триал день 2 — не вернулись ─────────────────────────────────────
+
+async def _send_day2_nudge(bot, user_id: int) -> None:
+    """Нудж для триальщиков которые не вернулись на день 2."""
     from user_state import get_user_state, UserState
     from db import get_profile, get_results, kv_set
 
@@ -139,18 +106,18 @@ async def _day2_nudge_job(ctx) -> None:
         if state == UserState.SUBSCRIBED:
             return  # уже купил
 
-        profile     = await get_profile(user_id)
-        results     = await get_results(user_id, limit=3)
-        niche       = profile.get("niche", "")
+        profile = await get_profile(user_id)
+        results = await get_results(user_id, limit=3)
+        niche   = profile.get("niche", "")
 
-        # Показываем что они ещё не попробовали
         used_agents = {r["agent_key"] for r in results}
         untried     = _get_untried_recommendation(niche, used_agents)
 
         if results:
             created_count = len(results)
+            noun = "материал" if created_count == 1 else "материала"
             text = (
-                f"Вчера создала {created_count} {'материал' if created_count == 1 else 'материала'}.\n\n"
+                f"Вчера создала {created_count} {noun}.\n\n"
                 f"Есть ещё кое-что под твою нишу что стоит попробовать: {untried['name']}.\n\n"
                 f"_{untried['pitch']}_"
             )
@@ -166,17 +133,31 @@ async def _day2_nudge_job(ctx) -> None:
             InlineKeyboardButton(f"→ Попробовать {untried['name']}", callback_data=untried["cb"]),
         ]])
 
-        await ctx.bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode="Markdown",
-            reply_markup=kb,
-        )
+        await bot.send_message(chat_id=user_id, text=text,
+                               parse_mode="Markdown", reply_markup=kb)
         await kv_set(user_id, _KEY_DAY2_SENT, "sent", ttl=86400 * 4)
         from flows.utm import track_event
         await track_event(user_id, "day2_nudge_sent")
+        logger.info(f"Day-2 nudge sent: user={user_id}")
     except Exception as e:
-        logger.warning(f"_day2_nudge_job failed: {e}")
+        logger.warning(f"_send_day2_nudge failed uid={user_id}: {e}")
+
+
+async def schedule_day2_nudge(app, user_id: int) -> None:
+    """
+    Регистрирует намерение отправить Day-2 нудж.
+    Фактическая отправка — через run_hourly_conversion() через 20ч.
+    """
+    from db import kv_get, kv_set
+    try:
+        existing = await kv_get(user_id, _KEY_DAY2_SENT)
+        if existing:
+            return
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        await kv_set(user_id, _KEY_DAY2_SENT, f"pending:{now_ts}", ttl=86400 * 4)
+        logger.info(f"Day-2 nudge flagged: user={user_id}")
+    except Exception as e:
+        logger.warning(f"schedule_day2_nudge: {e}")
 
 
 def _get_untried_recommendation(niche: str, used_agents: set) -> dict:
@@ -215,7 +196,6 @@ def _get_untried_recommendation(niche: str, used_agents: set) -> dict:
             "cb":    "agent_start_tg_plan",
         })
 
-    # Если всё попробовали
     if not candidates:
         return {
             "name": "Разбор профиля",
@@ -223,7 +203,7 @@ def _get_untried_recommendation(niche: str, used_agents: set) -> dict:
             "cb":    "agent_start_profile",
         }
 
-    # Приоритеты по нише
+    # Приоритет: запуск/курс → прогрев
     if any(kw in niche_l for kw in ["запуск", "курс", "продукт", "коуч", "тренер"]):
         warmup = next((c for c in candidates if c["cb"] == "agent_start_warmup"), None)
         if warmup:
@@ -232,96 +212,89 @@ def _get_untried_recommendation(niche: str, used_agents: set) -> dict:
     return candidates[0]
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# УТЕЧКА 3: Последний день триала
-# ═══════════════════════════════════════════════════════════════════════
+# ── Утечка 3: последний день триала ───────────────────────────────────────────
 
 async def schedule_lastday_nudge(app, user_id: int, expires_at: str) -> None:
     """
-    Планирует сообщение за 6 часов до истечения триала.
-    Вызывать при grant_trial() вместе с day2.
+    Регистрирует намерение отправить нудж за 6ч до истечения триала.
+    run_trial_warnings() в retention.py уже обрабатывает это — здесь
+    только ставим флаг чтобы не было дублирования.
     """
-    from db import kv_get
+    from db import kv_get, kv_set
     try:
         existing = await kv_get(user_id, _KEY_LASTDAY_SENT)
         if existing:
             return
-
-        exp_dt  = datetime.fromisoformat(expires_at)
-        trigger = exp_dt - timedelta(hours=6)
-        now     = datetime.now(timezone.utc)
-
-        if trigger <= now:
-            return  # уже прошло
-
-        app.job_queue.run_once(
-            callback=_lastday_nudge_job,
-            when=trigger,
-            name=f"lastday_{user_id}",
-            data=user_id,
-        )
-        from db import kv_set
-        await kv_set(user_id, _KEY_LASTDAY_SENT, "scheduled", ttl=86400 * 5)
-        logger.info(f"Last-day nudge scheduled: user={user_id} trigger={trigger.strftime('%H:%M')}")
+        await kv_set(user_id, _KEY_LASTDAY_SENT, f"pending:{expires_at}", ttl=86400 * 5)
     except Exception as e:
         logger.warning(f"schedule_lastday_nudge: {e}")
 
 
-async def _lastday_nudge_job(ctx) -> None:
-    user_id = ctx.job.data
-    from user_state import get_user_state, UserState
-    from db import get_results, kv_set
-    from lava_payments import get_payment_link
+# ── APScheduler job: каждый час проверяем кого пора нуджить ───────────────────
+
+async def run_hourly_conversion(bot) -> None:
+    """
+    Запускается каждый час из main.py (APScheduler).
+    Проверяет Redis-флаги и отправляет нуджи когда пришло время.
+    Переживает рестарты — флаги в Redis, не в памяти.
+    """
+    from db import get_redis
+    logger.info("[conversion] hourly run started")
+    sent = 0
 
     try:
-        state = await get_user_state(user_id)
-        if state == UserState.SUBSCRIBED:
-            return
+        r = await get_redis()
+        now_ts = int(datetime.now(timezone.utc).timestamp())
 
-        results = await get_results(user_id, limit=3)
+        # Сканируем pending флаги онбординга (ждём 15 минут)
+        async for key in r.scan_iter("bot:kv:*:__cv_onb_nudge__"):
+            try:
+                val = await r.get(key)
+                if not val or not val.startswith("pending:"):
+                    continue
+                flagged_ts = int(val.split(":")[1])
+                if now_ts - flagged_ts < 15 * 60:
+                    continue  # ещё не прошло 15 минут
+                # Извлекаем user_id из ключа: bot:kv:{user_id}:__cv_onb_nudge__
+                parts = key.split(":")
+                if len(parts) < 3:
+                    continue
+                uid = int(parts[2])
+                await _send_onboarding_nudge(bot, uid)
+                sent += 1
+            except Exception as e:
+                logger.warning(f"[conversion] onb nudge key error: {e}")
 
-        if results:
-            names = ", ".join(r["agent_name"] for r in results[:2])
-            created_text = f"За эти дни создала: {names}{'и другие' if len(results) > 2 else ''}."
-        else:
-            created_text = "Ты только начала — и это нормально."
+        # Сканируем pending флаги Day-2 (ждём 20 часов)
+        async for key in r.scan_iter("bot:kv:*:__cv_day2__"):
+            try:
+                val = await r.get(key)
+                if not val or not val.startswith("pending:"):
+                    continue
+                flagged_ts = int(val.split(":")[1])
+                if now_ts - flagged_ts < 20 * 3600:
+                    continue  # ещё не прошло 20 часов
+                parts = key.split(":")
+                if len(parts) < 3:
+                    continue
+                uid = int(parts[2])
+                await _send_day2_nudge(bot, uid)
+                sent += 1
+            except Exception as e:
+                logger.warning(f"[conversion] day2 nudge key error: {e}")
 
-        text = (
-            f"⏳ *Сегодня последний день триала.*\n\n"
-            f"{created_text}\n\n"
-            f"Если продолжишь — все материалы останутся, голос Миры уже настроен на тебя.\n\n"
-            f"Если нет — доступ закроется, но сохранённое никуда не денется."
-        )
-
-        link = get_payment_link(user_id)
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-        buttons = []
-        if link:
-            buttons.append([InlineKeyboardButton("💳 Оформить подписку", url=link)])
-        buttons.append([InlineKeyboardButton("← В меню", callback_data="menu_main")])
-        kb = InlineKeyboardMarkup(buttons)
-
-        await ctx.bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode="Markdown",
-            reply_markup=kb,
-        )
-        await kv_set(user_id, _KEY_LASTDAY_SENT, "sent", ttl=86400 * 5)
-        from flows.utm import track_event
-        await track_event(user_id, "lastday_nudge_sent")
     except Exception as e:
-        logger.warning(f"_lastday_nudge_job failed: {e}")
+        logger.error(f"[conversion] hourly run error: {e}")
+
+    logger.info(f"[conversion] hourly run done, sent={sent}")
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# ХЕЛПЕР: вызывается из grant_trial()
-# ═══════════════════════════════════════════════════════════════════════
+# ── Хелпер: вызывается из grant_trial() ───────────────────────────────────────
 
 async def on_trial_activated(app, user_id: int, expires_at: str) -> None:
     """
     Единая точка входа при активации триала.
-    Планирует все конверсионные нуджи.
+    Регистрирует конверсионные нуджи (переживают рестарты).
     """
     await schedule_day2_nudge(app, user_id)
     await schedule_lastday_nudge(app, user_id, expires_at)

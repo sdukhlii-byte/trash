@@ -733,12 +733,68 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                 "flow_carousel"    if agent_key == "carousel"    else
                 f"agent_start_{agent_key}"
             )
+            # Сохраняем oneshot в БД как полноценный результат
+            _result_id = 0
+            try:
+                from db import save_result as _sr
+                _result_id = await _sr(user_id, agent_key, f"{name} (быстро)", result)
+            except Exception as _e:
+                logger.warning(f"oneshot save_result failed: {_e}")
+
             await send(update, result, parse_mode="Markdown",
-                       reply_markup=kb([f"🔁 Детальнее|{deep_cb}",
-                                        f"💾 Сохранить|oneshot_save_{agent_key}"]))
+                       reply_markup=kb(
+                           [f"⚡ Детальнее с вопросами|{deep_cb}",
+                            f"💾 Сохранить|oneshot_save_{agent_key}"],
+                           ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
+                       ))
             await kv_set(user_id, "__oneshot_draft__",
                          json.dumps({"agent": agent_key, "name": name, "content": result},
                                     ensure_ascii=False))
+
+            # Voice feedback на oneshot тоже
+            if _result_id:
+                import asyncio as _aio
+                await _aio.sleep(0.8)
+                from voice_learner import voice_feedback_kb as _vfkb, get_voice_stats as _gvs
+                try:
+                    _vs    = await _gvs(user_id)
+                    _total = _vs.get("total_signals", 0)
+                    if _total == 0:
+                        _hint = "\n\n_Оцени — и Мира запомнит твой стиль._"
+                    elif _total < 5:
+                        _filled = "▓" * _total
+                        _empty  = "░" * (5 - _total)
+                        _hint   = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5_"
+                    else:
+                        _hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов) 🎯_"
+                except Exception:
+                    _hint = ""
+                await send(update, f"Звучит как твой голос?{_hint}",
+                           parse_mode="Markdown", reply_markup=_vfkb(_result_id))
+
+            # Usage-based конверсионный триггер (после 3-й генерации в триале)
+            try:
+                from user_state import get_user_state, UserState
+                from db import get_stats as _gs
+                _state = await get_user_state(user_id)
+                if _state == UserState.TRIAL:
+                    _stats = await _gs(user_id)
+                    if _stats.get("total", 0) == 3:
+                        import asyncio as _aio2
+                        await _aio2.sleep(1.5)
+                        from lava_payments import get_payment_link
+                        _link = get_payment_link(user_id)
+                        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                        _pay_kb = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("💳 Оформить подписку", url=_link)
+                        ]] if _link else [])
+                        await update.effective_chat.send_message(
+                            "Ты уже создала 3 материала — это хороший результат.\n\n"
+                            "Триал заканчивается. Хочешь продолжить без ограничений?",
+                            reply_markup=_pay_kb,
+                        )
+            except Exception:
+                pass
         return
 
     # ── Редактор промптов (только для админа) ─────────────────────────────────

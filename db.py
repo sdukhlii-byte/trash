@@ -92,7 +92,8 @@ async def close_db() -> None:
 
 
 def _get_pool() -> asyncpg.Pool:
-    assert _pool is not None, "DB pool not initialised — call init_db() first"
+    if _pool is None:
+        raise RuntimeError("DB pool not initialised — call init_db() first")
     return _pool
 
 

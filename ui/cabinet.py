@@ -48,12 +48,14 @@ async def show_cabinet(update: Update, user_id: int) -> None:
         rows.append(["💳 Оформить подписку|sub_pay"])
     elif state_obj == UserState.SUBSCRIBED:
         rows.append(["💳 Продлить подписку|sub_pay"])
+        rows.append(["👥 Пригласи коллегу — получи 7 дней|cab_referral"])
     elif state_obj == UserState.EXPIRED:
         rows.append(["🔄 Возобновить подписку|sub_pay"])
 
     rows += [
         ["✏️ Изменить профиль|profile_edit",  "📝 Стиль|style_menu"],
-        ["🧾 История платежей|cab_history",    "👥 Реферал|cab_referral"],
+        ["🧾 История платежей|cab_history",
+         "👥 Реферал|cab_referral" if state_obj != UserState.SUBSCRIBED else "📊 Прогресс|show_stats"],
         ["🤖 Сменить модель|profile_model"],
         ["← Меню|menu_main"],
     ]

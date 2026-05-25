@@ -26,9 +26,18 @@ SEM_HEAVY: asyncio.Semaphore | None = None
 _HTTP: httpx.AsyncClient | None = None
 _REDIS_INIT_LOCK = asyncio.Lock()
 
+# Промежуточные сообщения при долгой генерации (отправляются через 20с и 50с)
+_PROGRESS_MSGS = [
+    "Уже вижу структуру — дописываю детали...",
+    "Собираю всё что ты рассказала — почти готово...",
+    "Пишу финальную часть — это самое важное, чуть терпения...",
+    "Проверяю финальный вариант — ещё секунда...",
+]
+
 
 def get_http() -> httpx.AsyncClient:
-    assert _HTTP is not None, "HTTP client not initialised — call init_http() first"
+    if _HTTP is None:
+        raise RuntimeError("HTTP client not initialised — call init_http() first")
     return _HTTP
 
 
@@ -63,7 +72,8 @@ def init_semaphore(size_fast: int, size_heavy: int) -> None:
 
 async def _call(payload: dict, timeout: float = LLM_TIMEOUT, heavy: bool = False) -> str:
     sem = SEM_HEAVY if heavy else SEM_FAST
-    assert sem, "Semaphore not initialised — call init_semaphore() first"
+    if sem is None:
+        raise RuntimeError("Semaphore not initialised — call init_semaphore() first")
     headers = {
         "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type":  "application/json",
@@ -289,3 +299,70 @@ async def transcribe(ogg_bytes: bytes) -> str:
                 await asyncio.sleep(LLM_RETRY_DELAY * 2 ** attempt)
 
     raise RuntimeError("Whisper не ответил после нескольких попыток")
+
+
+# ── Progress-aware generation ──────────────────────────────────────────────────
+
+async def generate_with_progress(
+    system: str,
+    history: list,
+    final_prompt: str,
+    status_msg,          # telegram Message объект — будем редактировать его текст
+    model_key: str = DEFAULT_MODEL,
+    temperature: float = 0.85,
+    presence_penalty: float = 0.3,
+) -> str:
+    """
+    Генерация с промежуточными статусными апдейтами.
+
+    Через 20с и 50с после начала генерации редактирует status_msg
+    чтобы пользователь видел прогресс, а не думал что бот завис.
+
+    Это не стриминг (требует SSE), но создаёт ощущение живого процесса
+    при генерациях от 60 до 180 секунд.
+    """
+    import random
+
+    result_container: list = [None]
+    error_container:  list = [None]
+
+    async def _do_generate():
+        try:
+            result_container[0] = await generate_from_history(
+                system, history,
+                final_prompt=final_prompt,
+                model_key=model_key,
+                temperature=temperature,
+                presence_penalty=presence_penalty,
+            )
+        except Exception as e:
+            error_container[0] = e
+
+    gen_task = asyncio.create_task(_do_generate())
+
+    # Промежуточные апдейты
+    progress_msgs = random.sample(_PROGRESS_MSGS, min(2, len(_PROGRESS_MSGS)))
+    checkpoints   = [20, 50]  # секунды
+
+    for i, delay in enumerate(checkpoints):
+        try:
+            await asyncio.wait_for(asyncio.shield(gen_task), timeout=delay)
+            break  # завершилась раньше checkpoint — выходим
+        except asyncio.TimeoutError:
+            # Ещё генерируется — обновляем статус
+            if i < len(progress_msgs):
+                try:
+                    await status_msg.edit_text(progress_msgs[i])
+                except Exception:
+                    pass
+        except Exception:
+            break
+
+    # Дожидаемся финала если ещё не готово
+    if not gen_task.done():
+        await gen_task
+
+    if error_container[0]:
+        raise error_container[0]
+
+    return result_container[0] or ""

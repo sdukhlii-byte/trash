@@ -18,6 +18,7 @@ ENV переменные Railway:
   Ссылка: https://t.me/БОТ?start=ref_XXXXXXXX
 """
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -204,6 +205,42 @@ async def _check_access_db(user_id: int) -> bool:
             user_id, now
         )
         return trial is not None
+
+
+async def get_user_access_state(user_id: int) -> dict:
+    """
+    Батч-запрос: получаем subscription + trial + has_ever_trialed за один
+    пул-аккваир и три параллельных fetchrow.
+    Заменяет 4-6 последовательных DB-вызовов в _compute_user_state.
+    """
+    pool = _get_pool()
+    now  = datetime.now(timezone.utc)
+    async with pool.acquire() as conn:
+        sub_row, trial_row, ever_trial, ever_sub = await asyncio.gather(
+            conn.fetchrow(
+                "SELECT tier, expires_at FROM subscriptions "
+                "WHERE user_id=$1 AND status='active' AND expires_at > $2",
+                user_id, now,
+            ),
+            conn.fetchrow(
+                "SELECT expires_at FROM trials "
+                "WHERE user_id=$1 AND expires_at > $2",
+                user_id, now,
+            ),
+            conn.fetchrow(
+                "SELECT 1 FROM trials WHERE user_id=$1", user_id
+            ),
+            conn.fetchrow(
+                "SELECT 1 FROM subscriptions WHERE user_id=$1", user_id
+            ),
+        )
+    return {
+        "has_active_sub":   sub_row is not None,
+        "sub_expires_at":   sub_row["expires_at"].isoformat() if sub_row else None,
+        "has_active_trial": trial_row is not None,
+        "trial_expires_at": trial_row["expires_at"].isoformat() if trial_row else None,
+        "ever_had_access":  (ever_trial is not None) or (ever_sub is not None),
+    }
 
 
 async def get_subscription(user_id: int) -> dict | None:

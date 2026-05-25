@@ -69,8 +69,12 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
         result = await complete(qi_sys, prompt, temperature=0.85)
     except Exception as e:
         logger.error(f"[qi] generate error: {e}")
-        result = "Что-то сломалось — нажми ещё раз 🔁"
+        result = None
     await safe_delete(status)
+    if not result:
+        await send(update, "Не вышло с первого раза — данные сохранены, жми ещё раз 🔁",
+                   reply_markup=kb(["🔄 Повторить|quick_ideas", "← Меню|menu_main"]))
+        return
     await clear_agent_session(user_id, _QI_KEY)
     try:
         await save_result(user_id, "quick_ideas", "10 идей быстро", result)
@@ -93,12 +97,45 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
     try:
         import asyncio
         from db import get_results as _gr
-        from voice_learner import voice_feedback_kb
+        from voice_learner import voice_feedback_kb, get_voice_stats
         _recent = await _gr(user_id, limit=1)
         if _recent:
             await asyncio.sleep(0.5)
-            await send(update, "Звучит как твой голос?",
+            _vs    = await get_voice_stats(user_id)
+            _total = _vs.get("total_signals", 0)
+            if _total < 5:
+                _filled = "▓" * _total if _total else ""
+                _empty  = "░" * (5 - _total)
+                _hint   = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5_" if _total else \
+                          "\n\n_Оцени — и Мира запомнит твой стиль._"
+            else:
+                _hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов) 🎯_"
+            await send(update, f"Звучит как твой голос?{_hint}",
+                       parse_mode="Markdown",
                        reply_markup=voice_feedback_kb(_recent[0]["id"]))
+    except Exception:
+        pass
+
+    # Usage-based конверсионный триггер (3-я генерация в триале)
+    try:
+        from user_state import get_user_state, UserState
+        _state = await get_user_state(user_id)
+        if _state == UserState.TRIAL:
+            _stats = await get_stats(user_id)
+            if _stats.get("total", 0) == 3:
+                import asyncio as _aio
+                await _aio.sleep(1.5)
+                from lava_payments import get_payment_link
+                _link = get_payment_link(user_id)
+                from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                _pay_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("💳 Оформить подписку", url=_link)
+                ]] if _link else [])
+                await update.effective_chat.send_message(
+                    "Ты уже создала 3 материала — видно что пошло.\n\n"
+                    "Триал заканчивается. Хочешь продолжить без ограничений?",
+                    reply_markup=_pay_kb,
+                )
     except Exception:
         pass
 
@@ -147,7 +184,7 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
     await safe_delete(status)
     await clear_agent_session(user_id, _REFINE_KEY)
     if not result:
-        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
+        await send(update, "Связь прервалась — текст на месте, жми ещё раз 🔁",
                    reply_markup=kb(["✏️ Повторить|refine_last", "← Меню|menu_main"]))
         return
     try:
@@ -207,7 +244,7 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
         result = None
     await safe_delete(status)
     if not result:
-        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
+        await send(update, "Не вышло с первого раза — все данные на месте, жми 🔁",
                    reply_markup=kb(["🔄 Ещё раз|regen_last", "← Меню|menu_main"]))
         return
     try:
@@ -252,9 +289,17 @@ async def show_results(update: Update, user_id: int, page: int = 0) -> None:
     if not results:
         await send(
             update,
-            "📚 *Мои материалы*\n\n_Ещё ничего нет. Создай что-нибудь с помощью агентов!_",
+            "📚 *Мои материалы*\n\n"
+            "Здесь появится всё что ты создашь.\n\n"
+            "_С чего начать? Выбери инструмент 👇_",
             parse_mode="Markdown",
-            reply_markup=kb(["← Меню|menu_main"]),
+            reply_markup=kb(
+                ["✍️ Написать пост|agent_start_post",
+                 "🎬 Хуки для рилса|flow_reels_short"],
+                ["🎠 Карусель|flow_carousel",
+                 "📸 Сторис|agent_start_stories"],
+                ["← Меню|menu_main"],
+            ),
         )
         return
 
@@ -404,7 +449,7 @@ async def planner_gen_week(update: Update, user_id: int) -> None:
         result = None
     await safe_delete(status)
     if not result:
-        await send(update, "Что-то сломалось — нажми ещё раз 🔁",
+        await send(update, "Связь прервалась — жми ещё раз 🔁",
                    reply_markup=kb(["← Планировщик|planner_show"]))
         return
     await send(update, f"📅 *План на неделю:*\n\n{result}", parse_mode="Markdown",

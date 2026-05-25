@@ -20,7 +20,6 @@ import json
 import logging
 
 from db import is_onboarded, get_profile, kv_get, kv_set, kv_del
-from lava_payments import get_subscription, get_trial, has_used_trial
 
 logger = logging.getLogger(__name__)
 
@@ -70,37 +69,30 @@ async def invalidate_state_cache(user_id: int) -> None:
 
 
 async def _compute_user_state(user_id: int) -> UserState:
-    now = datetime.now(timezone.utc)
-
-    # 1. Онбординг
+    """
+    Единая точка расчёта состояния.
+    v3: вместо 4-6 последовательных DB-вызовов — один батч-запрос
+    через get_user_access_state() (4 параллельных fetchrow в одном коннекшне).
+    Redis-профиль читается отдельно т.к. хранится в KV, не в Postgres.
+    """
+    # 1. Онбординг (Redis KV — быстро)
     if not await is_onboarded(user_id):
         p = await get_profile(user_id)
         if not p.get("niche"):
             return UserState.NEW
         return UserState.ONBOARDED
 
-    # 2. Активная подписка
-    sub = await get_subscription(user_id)
-    if sub:
+    # 2. Всё остальное — один батч-запрос к Postgres
+    from lava_payments import get_user_access_state
+    access = await get_user_access_state(user_id)
+
+    if access["has_active_sub"]:
         return UserState.SUBSCRIBED
 
-    # 3. Активный триал
-    trial = await get_trial(user_id)
-    if trial:
+    if access["has_active_trial"]:
         return UserState.TRIAL
 
-    # 4. Был ли когда-либо доступ
-    used_trial = await has_used_trial(user_id)
-    if used_trial:
-        return UserState.EXPIRED
-
-    from db import _get_pool
-    pool = _get_pool()
-    async with pool.acquire() as conn:
-        had_sub = await conn.fetchrow(
-            "SELECT 1 FROM subscriptions WHERE user_id=$1", user_id
-        )
-    if had_sub:
+    if access["ever_had_access"]:
         return UserState.EXPIRED
 
     return UserState.ONBOARDED
