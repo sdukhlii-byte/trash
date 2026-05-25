@@ -107,6 +107,14 @@ async def get_agent_session_safe(user_id: int, key: str) -> dict | None:
 # ── Engine ─────────────────────────────────────────────────────────────────────
 
 async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
+    # Проверяем доступ ДО создания сессии — нет смысла создавать если нет доступа
+    from user_state import get_user_state, has_access
+    from ui.paywall import show_paywall
+    _state = await get_user_state(user_id)
+    if not has_access(_state):
+        await show_paywall(update, user_id, _state)
+        return
+
     await clear_agent_session(user_id, spec.key)
     await save_agent_session(user_id, spec.key, {
         "agent_key": spec.key, "step": "initial",
@@ -144,6 +152,14 @@ async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
 
 async def handle_text(update: Update, user_id: int,
                       spec: AgentSpec, text: str) -> None:
+    # Проверяем доступ на каждый шаг интервью — подписка могла истечь в процессе
+    from user_state import get_user_state, has_access
+    from ui.paywall import show_paywall
+    _state = await get_user_state(user_id)
+    if not has_access(_state):
+        await show_paywall(update, user_id, _state)
+        return
+
     session = await get_agent_session(user_id, spec.key)
     if not session:
         await start(update, user_id, spec)
@@ -234,6 +250,13 @@ async def handle_photo(update: Update, user_id: int, spec: AgentSpec) -> None:
 
 
 async def force_generate(update: Update, user_id: int, spec: AgentSpec) -> None:
+    from user_state import get_user_state, has_access
+    from ui.paywall import show_paywall
+    _state = await get_user_state(user_id)
+    if not has_access(_state):
+        await show_paywall(update, user_id, _state)
+        return
+
     session = await get_agent_session(user_id, spec.key)
     if not session:
         await start(update, user_id, spec)
@@ -284,9 +307,53 @@ async def _first_message(update: Update, user_id: int,
                reply_markup=kb(["⏭ Пропустить вопросы|agent_skip", "← Меню|menu_main"]))
 
 
+async def _is_offtopic(question: str, answer: str, agent_name: str) -> bool:
+    """
+    Быстрый классификатор: релевантен ли ответ вопросу.
+    Температура 0, max_tokens минимальный — занимает ~0.5с.
+    Возвращает True если ответ явно не по теме.
+    """
+    try:
+        verdict = await llm.complete(
+            f"Ты классифицируешь ответы пользователя в чат-боте для контент-мейкеров ({agent_name}).\n"
+            "Ответь ТОЛЬКО словом YES если ответ явно не относится к заданному вопросу "
+            "(случайный текст, вопрос вместо ответа, совсем другая тема).\n"
+            "Ответь ТОЛЬКО словом NO если ответ хоть как-то отвечает на вопрос, даже кратко или косвенно.\n"
+            "Сомнение = NO. Короткий ответ типа «не знаю», «любой», «что-то своё» = NO.",
+            f"Вопрос агента: {question}\n\nОтвет пользователя: {answer}",
+            temperature=0.0,
+        )
+        return verdict.strip().upper().startswith("YES")
+    except Exception:
+        return False  # при ошибке классификатора — не блокируем
+
+
 async def _interview_step(update: Update, user_id: int,
                            spec: AgentSpec, text: str, session: dict) -> None:
     ih = session["history"]
+
+    # Off-topic guard: проверяем только если есть предыдущий вопрос от агента
+    last_agent_q = next(
+        (m["content"] for m in reversed(ih) if m["role"] == "assistant"),
+        None
+    )
+    if last_agent_q and len(text.strip()) > 3:
+        offtopic = await _is_offtopic(last_agent_q[:300], text[:300], spec.name)
+        if offtopic:
+            # Вырезаем сам вопрос из истории для повтора
+            clean_q = last_agent_q.replace("[READY]", "").replace("[ready]", "").strip()
+            # Берём только первое предложение вопроса
+            short_q = clean_q.split("\n")[0][:200]
+            await send(
+                update,
+                f"Кажется, это не совсем про то о чём я спросила.\n\n"
+                f"_Мой вопрос был:_ {short_q}\n\n"
+                "Ответь на него — и двинемся дальше 👇",
+                parse_mode="Markdown",
+                reply_markup=kb(["⏭ Пропустить этот вопрос|agent_skip", "← Меню|menu_main"]),
+            )
+            return
+
     ih.append({"role": "user", "content": text[:1500]})
     interviewer = await _resolve_interviewer_custom(user_id, spec)
     try:
