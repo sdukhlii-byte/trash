@@ -209,30 +209,32 @@ async def _check_access_db(user_id: int) -> bool:
 
 async def get_user_access_state(user_id: int) -> dict:
     """
-    Батч-запрос: получаем subscription + trial + has_ever_trialed за один
-    пул-аккваир и три параллельных fetchrow.
-    Заменяет 4-6 последовательных DB-вызовов в _compute_user_state.
+    Батч-запрос: получаем subscription + trial + has_ever_trialed
+    за один pool.acquire и четыре последовательных fetchrow.
+
+    ВАЖНО: asyncpg не поддерживает параллельные запросы на одном коннекшне.
+    asyncio.gather(conn.fetchrow(...), conn.fetchrow(...)) вызывает
+    "another operation is in progress". Используем последовательные вызовы
+    в рамках одного коннекшна — это всё равно экономит 3 pool.acquire.
     """
     pool = _get_pool()
     now  = datetime.now(timezone.utc)
     async with pool.acquire() as conn:
-        sub_row, trial_row, ever_trial, ever_sub = await asyncio.gather(
-            conn.fetchrow(
-                "SELECT tier, expires_at FROM subscriptions "
-                "WHERE user_id=$1 AND status='active' AND expires_at > $2",
-                user_id, now,
-            ),
-            conn.fetchrow(
-                "SELECT expires_at FROM trials "
-                "WHERE user_id=$1 AND expires_at > $2",
-                user_id, now,
-            ),
-            conn.fetchrow(
-                "SELECT 1 FROM trials WHERE user_id=$1", user_id
-            ),
-            conn.fetchrow(
-                "SELECT 1 FROM subscriptions WHERE user_id=$1", user_id
-            ),
+        sub_row    = await conn.fetchrow(
+            "SELECT tier, expires_at FROM subscriptions "
+            "WHERE user_id=$1 AND status='active' AND expires_at > $2",
+            user_id, now,
+        )
+        trial_row  = await conn.fetchrow(
+            "SELECT expires_at FROM trials "
+            "WHERE user_id=$1 AND expires_at > $2",
+            user_id, now,
+        )
+        ever_trial = await conn.fetchrow(
+            "SELECT 1 FROM trials WHERE user_id=$1", user_id
+        )
+        ever_sub   = await conn.fetchrow(
+            "SELECT 1 FROM subscriptions WHERE user_id=$1", user_id
         )
     return {
         "has_active_sub":   sub_row is not None,

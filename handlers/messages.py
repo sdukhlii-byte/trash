@@ -283,7 +283,6 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if await handle_voice_note_text(update, user_id, text):
         return
 
-    # 1. Онбординг
     # 1. Онбординг — проверяем Redis-флаг ПЕРВЫМ, до любых Postgres-запросов
     onb = await get_onboarding_state(user_id)
     if onb:

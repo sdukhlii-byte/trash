@@ -39,27 +39,43 @@ async def get_user_state(user_id: int) -> UserState:
     """
     Единая точка определения состояния.
     Сначала проверяем кэш — если промах, считаем из БД и кладём в кэш.
+
+    Fallback при ошибке:
+    - Если Redis недоступен на первом чтении — идём в _compute
+    - Если Postgres недоступен в _compute — возвращаем SUBSCRIBED
+      (безопасный дефолт: лучше дать доступ платящему юзеру чем сломать онбординг новому)
+    - Никогда не возвращаем NEW при ошибке инфраструктуры
     """
     try:
         # 1. Быстрый путь: кэш
-        cached = await kv_get(user_id, _STATE_KEY)
-        if cached:
-            try:
-                return UserState(cached)
-            except ValueError:
-                pass  # невалидное значение — пересчитаем
+        try:
+            cached = await kv_get(user_id, _STATE_KEY)
+            if cached:
+                try:
+                    return UserState(cached)
+                except ValueError:
+                    pass  # невалидное значение — пересчитаем
+        except Exception:
+            pass  # Redis недоступен — идём дальше к _compute
 
-        # 2. Медленный путь: расчёт из БД
+        # 2. Медленный путь: расчёт
         state = await _compute_user_state(user_id)
 
-        # 3. Кэшируем (не кэшируем NEW — до онбординга состояние может меняться быстро)
+        # 3. Кэшируем (не кэшируем NEW — состояние меняется быстро)
         if state != UserState.NEW:
-            await kv_set(user_id, _STATE_KEY, state.value, ttl=STATE_CACHE_TTL)
+            try:
+                await kv_set(user_id, _STATE_KEY, state.value, ttl=STATE_CACHE_TTL)
+            except Exception:
+                pass  # не смогли закэшировать — не страшно
 
         return state
+
     except Exception as e:
         logger.error(f"get_user_state error uid={user_id}: {e}", exc_info=True)
-        return UserState.NEW
+        # ВАЖНО: при ошибке Postgres возвращаем SUBSCRIBED, не NEW.
+        # NEW ломает онбординг для существующих пользователей и скрывает платящих.
+        # SUBSCRIBED — безопасный дефолт: даём доступ, не ломаем воронку.
+        return UserState.SUBSCRIBED
 
 
 async def invalidate_state_cache(user_id: int) -> None:
@@ -70,21 +86,27 @@ async def invalidate_state_cache(user_id: int) -> None:
 
 async def _compute_user_state(user_id: int) -> UserState:
     """
-    Единая точка расчёта состояния.
-    v3: вместо 4-6 последовательных DB-вызовов — один батч-запрос
-    через get_user_access_state() (4 параллельных fetchrow в одном коннекшне).
-    Redis-профиль читается отдельно т.к. хранится в KV, не в Postgres.
+    Расчёт состояния пользователя.
+    Сначала Redis (быстро, без Postgres), потом Postgres если нужно.
+    При ошибке Postgres — не возвращаем NEW, а пробрасываем исключение
+    чтобы get_user_state мог его залогировать и вернуть правильный fallback.
     """
-    # 1. Онбординг (Redis KV — быстро)
-    if not await is_onboarded(user_id):
+    # 1. Онбординг — только Redis, без Postgres
+    onboarded = await is_onboarded(user_id)
+    if not onboarded:
         p = await get_profile(user_id)
         if not p.get("niche"):
             return UserState.NEW
+        # Нишу записали, но onboarded=True ещё нет (edge case)
         return UserState.ONBOARDED
 
-    # 2. Всё остальное — один батч-запрос к Postgres
-    from lava_payments import get_user_access_state
-    access = await get_user_access_state(user_id)
+    # 2. Подписка + триал — один батч-запрос к Postgres
+    try:
+        from lava_payments import get_user_access_state
+        access = await get_user_access_state(user_id)
+    except Exception as pg_err:
+        # Postgres недоступен — пробрасываем, get_user_state залогирует
+        raise RuntimeError(f"Postgres unavailable in _compute_user_state: {pg_err}") from pg_err
 
     if access["has_active_sub"]:
         return UserState.SUBSCRIBED
