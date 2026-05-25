@@ -53,13 +53,12 @@ _GIF_CAPTIONS: dict[str, str] = {
 # Стикеры из публичных паков: @NelaStickers, @CuteAnimals и т.д.
 
 _STICKER_IDS: dict[str, str] = {
-    # Ключ → момент, значение → Telegram file_id стикера
-    # "greeting":         "CAACAgIAAxkBAAFKpI5qFMCSk_tWhwwCA66M3JUJpiWxEwAC5C8AAhMNcUvuzRMluGpnhzsE",  # приветствие
-    # "thinking":         "CAACAgQAAxkBAAFKpJBqFMDLGOQPOdweTsTxPyg7gxNUnQAC5REAAvMQ-FBfSb9o5UeImDsE",  # думаю...
-    # "done":             "CAACAgIAAxkBAAFKpIBqFMAZI7L6qjp7Ccc6i-bKtVOBxwACN24AArarAUtyPWFAnRi3ljsE",  # готово!
-    # "voice_yes":        "CAACAgQAAxkBAAFKpJdqFMEX2Jsmb18NFWiW0fKVuEgPJAACZgAD133WJbaWlBdQOvxsOwQ",  # одобрение голоса
-    # "trial_welcome":    "CAACAgIAAxkBAAFKpJ1qFMF12hxpMdbawnHI3G9WLxyeFwACVycAAgcLgUruw48OoJ7eaDsE",  # добро пожаловать
-    # "level_up":         "CAACAgIAAxkBAAFKpKBqFMG_wKtKnyTUJ7jqD0vS6vYVbgAC00sAAp7OCwABm_7lR2o7-eE7BA",  # новый уровень
+    "greeting":      "CAACAgIAAxkBAAFKpI5qFMCSk_tWhwwCA66M3JUJpiWxEwAC5C8AAhMNcUvuzRMluGpnhzsE",
+    "thinking":      "CAACAgQAAxkBAAFKpJBqFMDLGOQPOdweTsTxPyg7gxNUnQAC5REAAvMQ-FBfSb9o5UeImDsE",
+    "done":          "CAACAgIAAxkBAAFKpIBqFMAZI7L6qjp7Ccc6i-bKtVOBxwACN24AArarAUtyPWFAnRi3ljsE",
+    "voice_yes":     "CAACAgQAAxkBAAFKpJdqFMEX2Jsmb18NFWiW0fKVuEgPJAACZgAD133WJbaWlBdQOvxsOwQ",
+    "trial_welcome": "CAACAgIAAxkBAAFKpJ1qFMF12hxpMdbawnHI3G9WLxyeFwACVycAAgcLgUruw48OoJ7eaDsE",
+    "level_up":      "CAACAgIAAxkBAAFKpKBqFMG_wKtKnyTUJ7jqD0vS6vYVbgAC00sAAp7OCwABm_7lR2o7-eE7BA",
 }
 
 

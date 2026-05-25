@@ -826,16 +826,17 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             result_id = int(data.split("_")[-1])
             from voice_learner import handle_voice_feedback_yes
             await handle_voice_feedback_yes(update, user_id, result_id)
-            # Ставим ❤️ в ответ на нажатие — живое ощущение диалога
-            from ui.media import react_to_voice_feedback
+            # Реакция ❤️
+            from ui.media import react_to_voice_feedback, send_sticker, send_gif
             await react_to_voice_feedback(update, ctx.bot)
-            # Level-up GIF если достигли уровня
+            # Стикер на каждое одобрение — живой отклик
+            await send_sticker(update, "voice_yes")
+            # Level-up стикер/GIF на milestone
             try:
                 from voice_learner import get_voice_stats
-                from ui.media import send_gif, send_sticker
                 _vs = await get_voice_stats(user_id)
                 _total = _vs.get("total_signals", 0)
-                if _total in (5, 10, 20):  # точки level-up
+                if _total in (5, 10, 20):
                     if not await send_sticker(update, "level_up"):
                         await send_gif(update, "voice_level_up")
             except Exception:

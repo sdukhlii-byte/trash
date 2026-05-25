@@ -129,10 +129,10 @@ async def _react_to_message(update: Update, text: str) -> None:
 
         text_l = text.lower()
 
-        # Подбираем реакцию по смыслу
+        # Подбираем реакцию по смыслу (только поддерживаемые Telegram эмодзи)
         if any(w in text_l for w in ("привет", "здравствуй", "хай", "hello", "hi", "добрый")):
             emoji = "🔥"
-        elif any(w in text_l for w in ("спасибо", "благодарю", "thanks", "класс", "отлично", "супер", "круто", "огонь", "💪")):
+        elif any(w in text_l for w in ("спасибо", "благодарю", "thanks", "класс", "отлично", "супер", "круто", "огонь")):
             emoji = "❤"
         elif any(w in text_l for w in ("хорошо", "окей", "ок", "понял", "поняла", "ясно", "да", "конечно")):
             emoji = "👍"
@@ -143,16 +143,14 @@ async def _react_to_message(update: Update, text: str) -> None:
         elif any(w in text_l for w in ("почему", "зачем", "как", "что", "когда", "объясни", "расскажи", "?")):
             emoji = "🤔"
         elif any(w in text_l for w in ("пост", "рилс", "контент", "текст", "идея", "пишу", "напиши")):
-            emoji = "✍"
+            emoji = "🔥"
         elif any(w in text_l for w in ("не работает", "ошибка", "сломал", "плохо", "ужасно", "не нравится")):
-            emoji = "🤝"
+            emoji = "🙏"
         elif len(text) > 200:
-            # Длинное сообщение — прочитала внимательно
             emoji = "👀"
         else:
-            # По умолчанию — огонь (энергия, интерес)
             import random
-            emoji = random.choice(["🔥", "❤", "👍", "⚡"])
+            emoji = random.choice(["🔥", "❤", "👍", "⚡", "🎉"])
 
         from ui.media import set_reaction
         await set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, emoji)
@@ -175,7 +173,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         from ui.media import set_reaction
         msg = update.message
         asyncio.create_task(
-            set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, "🎙")
+            set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, "👀")
         )
     except Exception:
         pass
@@ -388,11 +386,8 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await show_paywall(update, user_id, _state)
         return
 
-    # 2. Голосовой режим (редактирование)
-    if await kv_get(user_id, "__voice_edit_mode__"):
-        await kv_del(user_id, "__voice_edit_mode__")
-        await kv_del(user_id, "__voice_pending__")
-        await send(update, f"🎙 _{text}_", parse_mode="Markdown")
+    # 2. Голосовой режим (устаревший — убран, но ключ может быть в Redis у старых юзеров)
+    await kv_del(user_id, "__voice_edit_mode__")
 
     # 2a. Дейли — установка времени
     daily_time_s = await get_agent_session(user_id, "daily_time_flow")
