@@ -745,13 +745,33 @@ async def _notify_user(bot: Bot, user_id: int, tier: str, event_type: str) -> No
         InlineKeyboardButton("☰ Открыть меню", callback_data="menu_main")
     ]])
     try:
-        await bot.send_message(
-            chat_id=user_id,
-            text=text,
-            parse_mode="Markdown",
-            reply_markup=_post_pay_kb,
-        )
         await invalidate_state_cache(user_id)
+        # Пробуем отправить GIF — если файла нет, падаем на текст
+        _gif_sent = False
+        try:
+            import os as _os
+            from ui.media import _ASSETS_DIR, _GIFS
+            _gif_path = _os.path.join(_ASSETS_DIR, _GIFS.get("subscription_paid", ""))
+            if _os.path.exists(_gif_path):
+                with open(_gif_path, "rb") as _f:
+                    await bot.send_animation(
+                        chat_id=user_id,
+                        animation=_f,
+                        caption=text,
+                        parse_mode="Markdown",
+                        reply_markup=_post_pay_kb,
+                    )
+                _gif_sent = True
+        except Exception:
+            pass
+
+        if not _gif_sent:
+            await bot.send_message(
+                chat_id=user_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=_post_pay_kb,
+            )
     except Exception as e:
         logger.error(f"Notify user {user_id} failed: {e}")
 

@@ -630,8 +630,13 @@ async def _send_result(update: Update, result: str,
                 pass
 
     header = f"✅ *{spec.name} готово!*\n\n"
-    full   = header + result
-    CHUNK  = 3800
+
+    # Форматируем результат — хуки в моно, spoiler-концовка, разделители
+    from ui.media import format_result
+    formatted = format_result(result, spec.key)
+
+    full  = header + formatted
+    CHUNK = 3800
     if len(full) <= CHUNK:
         await send(update, full, parse_mode="Markdown")
     else:
@@ -641,6 +646,16 @@ async def _send_result(update: Update, result: str,
         for chunk in [rest[i:i + 4000] for i in range(0, len(rest), 4000)]:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
+
+    # GIF при первой генерации
+    try:
+        from db import get_stats
+        from ui.media import send_gif
+        _stats = await get_stats(user_id)
+        if _stats.get("total", 0) == 1:
+            await send_gif(update, "first_generation")
+    except Exception:
+        pass
 
     await _after_result(update, spec, user_id)
 
@@ -677,21 +692,13 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     if _result_id:
         import asyncio
         await asyncio.sleep(0.5)
-        # Строим прогресс-бар голоса
+        # Прогресс-бар голоса через единую библиотеку
         try:
             from voice_learner import get_voice_stats
+            from ui.progress_bar import voice_progress_short
             _vs = await get_voice_stats(user_id)
             _total = _vs.get("total_signals", 0)
-            if _total == 0:
-                _voice_hint = "\n\n_Оцени — и Мира начнёт запоминать твой стиль._"
-            elif _total < 5:
-                _filled = "▓" * _total
-                _empty  = "░" * (5 - _total)
-                _voice_hint = f"\n\n_Голос Миры: [{_filled}{_empty}] {_total}/5 — ещё {5 - _total} и попадание в твой стиль станет стабильным._"
-            elif _total < 10:
-                _voice_hint = f"\n\n_Голос Миры: точный ({_total} сигналов) — тексты становятся лучше с каждой оценкой._ 🎯"
-            else:
-                _voice_hint = f"\n\n_Голос Миры: прокачан ({_total} сигналов). Каждая оценка делает его ещё точнее._ 🎯"
+            _voice_hint = voice_progress_short(_total)
         except Exception:
             _voice_hint = ""
 

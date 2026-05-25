@@ -84,8 +84,12 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                 "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
                 "Напиши тему поста или нажми меню 👇"
             )
-            await send(update, caption, parse_mode="Markdown",
-                       reply_markup=kb(["☰ Главное меню|menu_main"]))
+            # GIF-анимация — если файл есть, показываем вместо текста
+            from ui.media import send_gif
+            sent_gif = await send_gif(update, "trial_activated", caption)
+            if not sent_gif:
+                await send(update, caption, parse_mode="Markdown",
+                           reply_markup=kb(["☰ Главное меню|menu_main"]))
         except ValueError:
             await edit(query,
                        "Пробный период уже использовала.\n\nОформи подписку — и продолжим работу 👇",
@@ -828,6 +832,19 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             result_id = int(data.split("_")[-1])
             from voice_learner import handle_voice_feedback_yes
             await handle_voice_feedback_yes(update, user_id, result_id)
+            # Ставим ❤️ в ответ на нажатие — живое ощущение диалога
+            from ui.media import react_to_voice_feedback
+            await react_to_voice_feedback(update, context.bot)
+            # Level-up GIF если достигли уровня
+            try:
+                from voice_learner import get_voice_stats
+                from ui.media import send_gif
+                _vs = await get_voice_stats(user_id)
+                _total = _vs.get("total_signals", 0)
+                if _total in (5, 10, 20):  # точки level-up
+                    await send_gif(update, "voice_level_up")
+            except Exception:
+                pass
         except Exception as e:
             await send(update, "✅ Записала!", reply_markup=kb(["← Меню|menu_main"]))
         return

@@ -58,6 +58,11 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("support",   cmd_support))
     app.add_handler(CommandHandler("admin",     cmd_admin))
 
+    # Inline Query — вызов Миры из любого чата (@МираBot тема поста)
+    from telegram.ext import InlineQueryHandler
+    from ui.media import handle_inline_query
+    app.add_handler(InlineQueryHandler(handle_inline_query))
+
     # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE,                   handle_voice))
@@ -287,7 +292,7 @@ async def main() -> None:
         await ptb_app.bot.set_webhook(
             url=f"{WEBHOOK_URL}/tg",
             secret_token=WEBHOOK_SECRET or None,
-            allowed_updates=["message", "callback_query"],
+            allowed_updates=["message", "callback_query", "inline_query"],
             drop_pending_updates=True,
         )
         logger.info(f"Webhook set: {WEBHOOK_URL}/tg")
