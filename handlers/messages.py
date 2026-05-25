@@ -284,17 +284,33 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         return
 
     # 1. Онбординг
+    # 1. Онбординг — проверяем Redis-флаг ПЕРВЫМ, до любых Postgres-запросов
     onb = await get_onboarding_state(user_id)
     if onb:
         is_intentional = onb.get("source") in ("profile_edit",)
-        active_agent   = await _detect_active_agent(user_id)
-        model_key      = await get_model(user_id)
-        chat_history   = await get_history(user_id, model_key, "chat")
-        if (active_agent or chat_history) and not is_intentional:
-            from db import clear_onboarding_state
-            await clear_onboarding_state(user_id)
+        if not is_intentional:
+            # Проверяем есть ли активный агент — только KV, без Postgres
+            active_agent = await _detect_active_agent(user_id)
+            if active_agent:
+                # Пользователь в середине агента — онбординг прерываем
+                from db import clear_onboarding_state
+                await clear_onboarding_state(user_id)
+            else:
+                # Онбординг активен — обрабатываем ввод
+                try:
+                    if await handle_onboarding(update, user_id, text, onb):
+                        return
+                except Exception as _onb_err:
+                    logger.error(f"handle_onboarding error uid={user_id}: {_onb_err}", exc_info=True)
+                    await send(update, "Связь прервалась — ответь ещё раз 🔁")
+                    return
         else:
-            if await handle_onboarding(update, user_id, text, onb):
+            try:
+                if await handle_onboarding(update, user_id, text, onb):
+                    return
+            except Exception as _onb_err:
+                logger.error(f"handle_onboarding (intentional) error uid={user_id}: {_onb_err}", exc_info=True)
+                await send(update, "Что-то пошло не так — попробуй снова 🔁")
                 return
 
     # Проверяем онбординг (edge-case: Redis-ключ потерян после рестарта)

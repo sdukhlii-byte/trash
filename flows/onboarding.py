@@ -83,9 +83,11 @@ async def _smart_ack_niche(user_id: int, niche: str) -> str:
             f"Ниша пользователя: «{niche}»",
             temperature=0.65,
         )
-        return result.strip()
+        if result and result.strip():
+            return result.strip()
+        raise ValueError("empty response")
     except Exception as e:
-        logger.warning(f"smart_ack_niche failed: {e}")
+        logger.warning(f"smart_ack_niche failed (fallback): {e}")
         return (
             f"Поняла — {niche[:40]}.\n\n"
             "Кто твои люди?\n\n"
@@ -100,9 +102,11 @@ async def _smart_ack_audience(user_id: int, audience: str) -> str:
             f"Аудитория: «{audience}»",
             temperature=0.55,
         )
-        return result.strip()
+        if result and result.strip():
+            return result.strip()
+        raise ValueError("empty response")
     except Exception as e:
-        logger.warning(f"smart_ack_audience failed: {e}")
+        logger.warning(f"smart_ack_audience failed (fallback): {e}")
         return (
             "Вижу с кем работаешь.\n\n"
             "Как ты с ними разговариваешь?\n\n"
