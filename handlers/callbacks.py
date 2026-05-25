@@ -774,7 +774,6 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
             # Usage-based конверсионный триггер (после 3-й генерации в триале)
             try:
-                from user_state import get_user_state, UserState
                 from db import get_stats as _gs
                 _state = await get_user_state(user_id)
                 if _state == UserState.TRIAL:
