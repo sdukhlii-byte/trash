@@ -288,6 +288,11 @@ async def car_generate(update: Update, user_id: int, s: dict) -> None:
         )
     except Exception as e:
         logger.warning(f"save_result carousel failed: {e}")
+    try:
+        from ui.home import update_streak_on_result
+        await update_streak_on_result(user_id)
+    except Exception:
+        pass
 
     header = f"🎠 *Карусель готова*\n{te} _{tn}_ · {fe} _{fn}_\n\n"
     CHUNK = 3800

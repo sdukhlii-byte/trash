@@ -309,13 +309,9 @@ async def save_result(user_id: int, agent_key: str,
                VALUES ($1, $2, $3, $4) RETURNING id""",
             user_id, agent_key, agent_name, content,
         )
-    # Обновляем стрик при каждом сохранённом результате
-    try:
-        from ui.home import update_streak_on_result
-        await update_streak_on_result(user_id)
-    except Exception:
-        pass
     return result_id or 0
+    # Примечание: update_streak_on_result вызывается из agents._send_result()
+    # чтобы избежать circular import db → ui.home → db
 
 
 async def get_results(user_id: int, limit: int = 50) -> list[dict]:

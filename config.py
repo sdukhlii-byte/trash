@@ -883,20 +883,19 @@ PLANNER_IDEAS_SYSTEM = """Ты — контент-стратег. Составл
 Без вступлений. Только план."""
 
 
-# ===========================================================================
-# ДОПОЛНЕНИЯ v2 (added by refactoring)
-# ===========================================================================
 
+# ===========================================================================
+# v2: Алиасы и новые константы (не дублируют оригинал)
+# ===========================================================================
 import os as _os
 
-BOT_TOKEN      = _os.environ.get("BOT_TOKEN", _os.environ.get("TELEGRAM_TOKEN", ""))
-OPENROUTER_KEY = _os.environ.get("OPENROUTER_KEY", "")
-OPENAI_KEY     = _os.environ.get("OPENAI_KEY", "")
-WEBHOOK_URL    = _os.environ.get("WEBHOOK_URL", "")
+# BOT_TOKEN — алиас для совместимости (оригинал использует TELEGRAM_TOKEN)
+BOT_TOKEN      = TELEGRAM_TOKEN
+
+# Новые переменные которых не было в оригинале
 WEBHOOK_SECRET = _os.environ.get("WEBHOOK_SECRET", "")
 ADMIN_ID       = int(_os.environ.get("ADMIN_ID", "0"))
 WHISPER_URL    = "https://api.openai.com/v1/audio/transcriptions"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Semaphore sizes (replaces dead LLM_SEMAPHORE_SIZE)
 SEM_FAST_SIZE  = int(_os.environ.get("SEM_FAST_SIZE",  "20"))

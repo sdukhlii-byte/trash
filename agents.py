@@ -522,11 +522,18 @@ async def _send_result(update: Update, result: str,
     if not result or not result.strip():
         result = "⚠️ Получен пустой ответ. Попробуй запустить агента заново."
 
+    result_id = 0
     if not _already_saved:
         try:
-            await save_result(user_id, spec.key, spec.name, result)
+            result_id = await save_result(user_id, spec.key, spec.name, result)
         except Exception as e:
             logger.warning(f"Could not save result: {e}")
+        # Обновляем стрик здесь (не в db.py — там circular import)
+        try:
+            from ui.home import update_streak_on_result
+            await update_streak_on_result(user_id)
+        except Exception:
+            pass
 
     if spec.as_file:
         fname    = f"{spec.file_prefix}_{user_id}.txt"

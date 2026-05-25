@@ -188,6 +188,11 @@ async def rs_generate(update: Update, user_id: int, s: dict) -> None:
         )
     except Exception as e:
         logger.warning(f"save_result rs failed: {e}")
+    try:
+        from ui.home import update_streak_on_result
+        await update_streak_on_result(user_id)
+    except Exception:
+        pass
 
     await send(
         update,
