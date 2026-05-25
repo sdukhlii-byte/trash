@@ -677,19 +677,8 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await _route(update, ctx, user_id, pending)
         return
 
-    if data == "voice_edit":
-        pending = await kv_get(user_id, "__voice_pending__")
-        if not pending:
-            await edit(query, "Нет ожидающего запроса.", reply_markup=kb(["← Меню|menu_main"]))
-            return
-        await kv_set(user_id, "__voice_edit_mode__", "1", ttl=3600)
-        await edit(query, f"✏️ Отредактируй и отправь:\n\n`{pending}`",
-                   parse_mode="Markdown", reply_markup=kb(["❌ Отмена|voice_edit_cancel"]))
-        return
-
-    if data == "voice_edit_cancel":
+    if data == "voice_cancel":
         await kv_del(user_id, "__voice_pending__")
-        await kv_del(user_id, "__voice_edit_mode__")
         await edit(query, "Отменено.", reply_markup=kb(["← Меню|menu_main"]))
         return
 

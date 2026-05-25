@@ -201,9 +201,9 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await kv_set(user_id, "__voice_pending__", clean, ttl=3600)
     await send(
         update,
-        f"🎙 Расшифровала:\n\n_{clean}_\n\nОтправить как запрос или хочешь отредактировать?",
+        f"🎙 _Расшифровала:_\n\n{clean}\n\nОтправить как запрос?",
         parse_mode="Markdown",
-        reply_markup=kb(["✅ Отправить|voice_send"], ["✏️ Редактировать|voice_edit"]),
+        reply_markup=kb(["✅ Отправить|voice_send"], ["❌ Отмена|voice_cancel"]),
     )
 
 
