@@ -56,7 +56,7 @@ async def _send_onboarding_nudge(bot, user_id: int) -> None:
             f"Кстати.\n\n"
             f"Для твоей ниши «{niche[:30]}» лучше всего работает: {example.lower()}\n\n"
             f"Хочешь посмотреть как Мира напишет это конкретно под твою аудиторию?\n\n"
-            f"*3 дня бесплатно — без карты.*"
+            f"*7 дней бесплатно — без карты.*"
         )
 
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton

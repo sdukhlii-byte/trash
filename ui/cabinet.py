@@ -42,7 +42,7 @@ async def show_cabinet(update: Update, user_id: int) -> None:
 
     rows = []
     if state_obj == UserState.ONBOARDED:
-        rows.append(["🎁 Активировать 3 дня бесплатно|sub_trial"])
+        rows.append(["🎁 Активировать 7 дней бесплатно|sub_trial"])
         rows.append(["💳 Оформить подписку|sub_pay"])
     elif state_obj == UserState.TRIAL:
         rows.append(["💳 Оформить подписку|sub_pay"])

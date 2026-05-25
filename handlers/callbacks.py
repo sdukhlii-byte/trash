@@ -80,7 +80,7 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             await grant_trial(user_id)
             await invalidate_state_cache(user_id)
             caption = (
-                f"🎁 *{TRIAL_DAYS} дня доступа активированы.*\n\n"
+                f"🎁 *{TRIAL_DAYS} дней доступа активированы.*\n\n"
                 "Полный доступ ко всем инструментам — пиши, стратегируй, генерируй.\n"
                 "Напиши тему поста или нажми меню 👇"
             )
