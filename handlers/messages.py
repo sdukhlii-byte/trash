@@ -108,8 +108,57 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"[dedup] user={user_id} — запрос уже в обработке")
         return
 
+    # Мгновенная реакция на сообщение — как живой персонаж
+    # Ставится до обработки, пока бот "думает"
+    asyncio.create_task(_react_to_message(update, text))
+
     async with lock:
         await _route(update, ctx, user_id, text)
+
+
+async def _react_to_message(update: Update, text: str) -> None:
+    """
+    Умная реакция на входящее сообщение.
+    Подбирает эмодзи по контексту сообщения — как живой человек.
+    Ставится мгновенно, не блокирует обработку.
+    """
+    try:
+        msg = update.message
+        if not msg:
+            return
+
+        text_l = text.lower()
+
+        # Подбираем реакцию по смыслу
+        if any(w in text_l for w in ("привет", "здравствуй", "хай", "hello", "hi", "добрый")):
+            emoji = "🔥"
+        elif any(w in text_l for w in ("спасибо", "благодарю", "thanks", "класс", "отлично", "супер", "круто", "огонь", "💪")):
+            emoji = "❤"
+        elif any(w in text_l for w in ("хорошо", "окей", "ок", "понял", "поняла", "ясно", "да", "конечно")):
+            emoji = "👍"
+        elif any(w in text_l for w in ("нет", "не надо", "стоп", "отмена", "не хочу")):
+            emoji = "🤔"
+        elif any(w in text_l for w in ("помог", "получилось", "вышло", "работает", "готово", "сделала")):
+            emoji = "🏆"
+        elif any(w in text_l for w in ("почему", "зачем", "как", "что", "когда", "объясни", "расскажи", "?")):
+            emoji = "🤔"
+        elif any(w in text_l for w in ("пост", "рилс", "контент", "текст", "идея", "пишу", "напиши")):
+            emoji = "✍"
+        elif any(w in text_l for w in ("не работает", "ошибка", "сломал", "плохо", "ужасно", "не нравится")):
+            emoji = "🤝"
+        elif len(text) > 200:
+            # Длинное сообщение — прочитала внимательно
+            emoji = "👀"
+        else:
+            # По умолчанию — огонь (энергия, интерес)
+            import random
+            emoji = random.choice(["🔥", "❤", "👍", "⚡"])
+
+        from ui.media import set_reaction
+        await set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, emoji)
+
+    except Exception as e:
+        logger.debug(f"[react] failed: {e}")
 
 
 # ── Voice handler ──────────────────────────────────────────────────────────────
@@ -120,6 +169,16 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not has_access(state):
         await show_paywall(update, user_id, state)
         return
+
+    # Мгновенная реакция на голосовое — показывает что услышала
+    try:
+        from ui.media import set_reaction
+        msg = update.message
+        asyncio.create_task(
+            set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, "🎙")
+        )
+    except Exception:
+        pass
 
     status = await update.message.reply_text("Слушаю... 🎙")
     try:
