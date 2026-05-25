@@ -235,7 +235,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Рилс-коротышка
     rs = await get_agent_session(user_id, _RS_KEY)
-    if rs and rs.get("step") in ("await_topic", "await_details_text"):
+    if rs and rs.get("step") in ("await_topic", "await_desc_details"):
         await _rs_handle_photo(update, user_id, rs, caption)
         return
 
@@ -470,14 +470,7 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             await send(update, "⚠️ Предыдущая генерация прервалась. Начни тему заново.",
                        reply_markup=kb(["🎬 Новый рилс|flow_reels_short", "← Меню|menu_main"]))
             return
-        step = rs.get("step", "")
-        if step == "await_details_text":
-            rs["details"] = text
-            await save_agent_session(user_id, _RS_KEY, rs)
-            from flows.reels import rs_await_destination
-            await rs_await_destination(update, user_id, rs)
-        else:
-            await rs_route_text(update, user_id, text, rs)
+        await rs_route_text(update, user_id, text, rs)
         return
 
     # 4. Карусель
