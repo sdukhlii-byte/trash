@@ -512,8 +512,25 @@ async def push_expired_user(bot: Bot, user_id: int) -> None:
                 if elapsed < msg["delay_hours"] * 0.9:
                     return
 
+    # Персонализация шага 0: называем реальные материалы пользователя
+    text = msg["text"]
+    if step == 0:
+        try:
+            from db import get_results
+            results = await get_results(user_id, limit=2)
+            if results:
+                names = ", ".join(r["agent_name"] for r in results[:2])
+                text = (
+                    f"Пробный период закончился.\n\n"
+                    f"Твои материалы — {names} — сохранены и ждут тебя.\n\n"
+                    f"Я не исчезла — просто пора перейти к нормальной работе вместе. "
+                    f"Один клик и продолжаем."
+                )
+        except Exception:
+            pass  # fallback на стандартный текст
+
     buttons = pay_kb(user_id, trial=False)
-    sent = await send_push(bot, user_id, msg["text"], buttons)
+    sent = await send_push(bot, user_id, text, buttons)
     if sent:
         await log_push(user_id, "expired", step)
         logger.info(f"Expired push sent: user={user_id} step={step}")
@@ -534,10 +551,9 @@ async def push_trial_warning(bot: Bot, user_id: int) -> None:
 
     text = (
         f"⚠️ *Осталось ~{hours_left} часов бесплатного доступа.*\n\n"
-        "Надеюсь, ты уже попробовала рилсы, карусели или контент-план — "
-        "и увидела насколько это быстрее чем вручную.\n\n"
+        "Надеюсь, ты уже попробовала рилсы, карусели или контент-план.\n\n"
         "Чтобы не потерять доступ и все свои материалы — "
-        "оформи подписку прямо сейчас. Это €1 в день 💙"
+        "оформи подписку и продолжим работу вместе 💙"
     )
     buttons = pay_kb(user_id, trial=False)
 

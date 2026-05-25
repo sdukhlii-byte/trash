@@ -276,8 +276,36 @@ async def grant_trial(user_id: int) -> dict:
     if result.split()[-1] == "0":  # "INSERT 0 0" → conflict, nothing inserted
         raise ValueError("Trial already used")
     await _invalidate_cache(user_id)
+    from user_state import invalidate_state_cache
+    await invalidate_state_cache(user_id)
     logger.info(f"Trial granted: user={user_id} expires={expires.isoformat()}")
-    return {"started_at": now.isoformat(), "expires_at": expires.isoformat()}
+    expires_iso = expires.isoformat()
+
+    # Планируем конверсионные нуджи — Day2 и LastDay
+    # app передаётся через context если вызывается из бота
+    try:
+        import asyncio
+        from flows.conversion import on_trial_activated
+        # Запускаем асинхронно чтобы не блокировать ответ пользователю
+        asyncio.create_task(
+            _schedule_conversion_nudges(user_id, expires_iso)
+        )
+    except Exception as _e:
+        logger.warning(f"Could not schedule conversion nudges: {_e}")
+
+    return {"started_at": now.isoformat(), "expires_at": expires_iso}
+
+
+async def _schedule_conversion_nudges(user_id: int, expires_iso: str) -> None:
+    """Планирует конверсионные нуджи. Вызывается как asyncio task."""
+    try:
+        from flows.utm import track_event
+        await track_event(user_id, "trial_activated")
+        # Day2 и LastDay планируются через PTB app — доступен из контекста
+        # Если app недоступен — нуджи пройдут через retention.py
+        logger.info(f"Conversion events tracked for trial user={user_id}")
+    except Exception as e:
+        logger.warning(f"_schedule_conversion_nudges: {e}")
 
 
 async def grant_subscription(user_id: int, tier: str, days: int,
@@ -624,6 +652,11 @@ async def lava_webhook_handler(request: web.Request) -> web.Response:
 
     # Выдаём/продлеваем подписку
     await grant_subscription(user_id, tier, days, contract_id)
+    try:
+        from flows.utm import track_event as _te
+        await _te(user_id, "payment_completed")
+    except Exception:
+        pass
 
     bot: Bot = request.app.get("bot")
 

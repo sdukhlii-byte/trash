@@ -3,7 +3,7 @@ import os
 # ==================== BRAND (АЛО) ====================
 # Тексты для BotFather и онбординга — редактировать здесь
 
-BOT_DISPLAY_NAME = "АлоБОТ || Ало, контент? Да-да, деньги"
+BOT_DISPLAY_NAME = "Мира — контент в твоём голосе"
 
 BOT_SHORT_DESCRIPTION = (
     "Пишу контент за тебя. "
@@ -58,7 +58,7 @@ DEFAULT_MODEL = "claude"
 MAX_HISTORY          = 40
 LLM_SEMAPHORE_FAST   = 20   # short calls: classify, single complete, chat
 LLM_SEMAPHORE_HEAVY  = 6    # heavy calls: generate_from_history, complete_long (60-180s each)
-LLM_SEMAPHORE_SIZE   = 15   # kept for backwards compat — not used by llm.py anymore
+# LLM_SEMAPHORE_SIZE удалена — мёртвая переменная (заменена SEM_FAST_SIZE/SEM_HEAVY_SIZE)
 LLM_RETRY          = 3
 LLM_RETRY_DELAY    = 2.0
 LLM_RETRY_DELAY_CAP = 30.0      # cap для экспоненциального backoff
@@ -882,3 +882,31 @@ PLANNER_IDEAS_SYSTEM = """Ты — контент-стратег. Составл
 
 Без вступлений. Только план."""
 
+
+# ===========================================================================
+# ДОПОЛНЕНИЯ v2 (added by refactoring)
+# ===========================================================================
+
+import os as _os
+
+BOT_TOKEN      = _os.environ.get("BOT_TOKEN", _os.environ.get("TELEGRAM_TOKEN", ""))
+OPENROUTER_KEY = _os.environ.get("OPENROUTER_KEY", "")
+OPENAI_KEY     = _os.environ.get("OPENAI_KEY", "")
+WEBHOOK_URL    = _os.environ.get("WEBHOOK_URL", "")
+WEBHOOK_SECRET = _os.environ.get("WEBHOOK_SECRET", "")
+ADMIN_ID       = int(_os.environ.get("ADMIN_ID", "0"))
+WHISPER_URL    = "https://api.openai.com/v1/audio/transcriptions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Semaphore sizes (replaces dead LLM_SEMAPHORE_SIZE)
+SEM_FAST_SIZE  = int(_os.environ.get("SEM_FAST_SIZE",  "20"))
+SEM_HEAVY_SIZE = int(_os.environ.get("SEM_HEAVY_SIZE", "6"))
+
+GEN_TIMEOUT = 180
+
+def build_profile_ctx(profile: dict) -> str:
+    parts = []
+    if profile.get("niche"):    parts.append(f"\nНиша автора: {profile['niche']}")
+    if profile.get("audience"): parts.append(f"Аудитория: {profile['audience']}")
+    if profile.get("tone"):     parts.append(f"Тон голоса: {profile['tone']}")
+    return "\n".join(parts)

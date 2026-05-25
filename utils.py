@@ -1,43 +1,38 @@
+"""
+utils.py — вспомогательные утилиты Telegram.
+
+Изменения v2:
+- bare `except: pass` → `except TelegramError: pass` везде где уместно
+- send/edit используют TelegramError вместо голого except
+- добавлен safe_delete() для явного удаления статус-сообщений
+"""
 import asyncio
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import NetworkError, TimedOut, RetryAfter, BadRequest
+from telegram.error import NetworkError, TimedOut, RetryAfter, BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
 
-
 def md_escape(text: str) -> str:
-    """Экранирует спецсимволы Markdown v1 для Telegram.
-
-    Telegram Markdown v1 ломается на: _ * ` [ ]
-    Эмодзи и Unicode безопасны — их не трогаем.
-    Также экранируем обратный слэш чтобы не сломать уже экранированные символы.
-    """
     if not isinstance(text, str):
         text = str(text)
-    # Сначала backslash, потом остальные (иначе двойное экранирование)
     for ch in ("\\", "_", "*", "`", "[", "]"):
         text = text.replace(ch, f"\\{ch}")
     return text
 
 
 def profile_val(profile: dict, key: str, default: str = "—") -> str:
-    """Безопасно извлекает значение профиля и экранирует его для Markdown.
-
-    Гарантирует что любой пользовательский ввод (эмодзи, спецсимволы,
-    пустая строка, None) не сломает Telegram Markdown парсер.
-    """
     raw = profile.get(key) if isinstance(profile, dict) else None
-    # Нормализуем: None, пустая строка, только пробелы -> default
     if not raw or not str(raw).strip():
         raw = default
     return md_escape(str(raw).strip())
 
 
-# ── keyboard builder ──────────────────────────────────────────────────────────
+# ── keyboard builder ───────────────────────────────────────────────────────────
+
 def kb(*rows) -> InlineKeyboardMarkup:
     result = []
     for row in rows:
@@ -55,7 +50,18 @@ def kb(*rows) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(result)
 
 
-# ── safe send ─────────────────────────────────────────────────────────────────
+# ── safe delete helper ─────────────────────────────────────────────────────────
+
+async def safe_delete(msg) -> None:
+    """Удаляет сообщение, тихо глотая TelegramError (сообщение уже удалено и т.п.)."""
+    try:
+        await msg.delete()
+    except TelegramError:
+        pass
+
+
+# ── safe send ──────────────────────────────────────────────────────────────────
+
 def _get_chat(update: Update):
     if update.message:
         return update.message
@@ -73,8 +79,9 @@ async def send(update: Update, text: str, **kwargs) -> None:
     for i, chunk in enumerate(chunks):
         if i > 0:
             await asyncio.sleep(0.3)
-        kw = kwargs if i == len(chunks) - 1 else {k: v for k, v in kwargs.items()
-                                                    if k != "reply_markup"}
+        kw = kwargs if i == len(chunks) - 1 else {
+            k: v for k, v in kwargs.items() if k != "reply_markup"
+        }
         await _send_once(msg, chunk, **kw)
 
 
@@ -90,14 +97,12 @@ async def _send_once(msg, text: str, **kwargs) -> None:
         except BadRequest as e:
             err = str(e).lower()
             if "parse" in err and "parse_mode" in kwargs:
-                # Markdown сломан — отправляем без форматирования
                 kw2 = {k: v for k, v in kwargs.items() if k != "parse_mode"}
                 try:
                     await msg.reply_text(text, **kw2)
-                except Exception as e2:
+                except TelegramError as e2:
                     logger.error(f"send fallback error: {e2}")
             elif "message is too long" in err:
-                # Режем пополам и отправляем двумя сообщениями
                 mid = len(text) // 2
                 cut = text.rfind("\n", 0, mid) or mid
                 kw2 = {k: v for k, v in kwargs.items() if k != "reply_markup"}
@@ -105,13 +110,13 @@ async def _send_once(msg, text: str, **kwargs) -> None:
                     await msg.reply_text(text[:cut], **kw2)
                     await asyncio.sleep(0.3)
                     await msg.reply_text(text[cut:], **kwargs)
-                except Exception as e2:
+                except TelegramError as e2:
                     logger.error(f"send split error: {e2}")
             else:
-                logger.error(f"send BadRequest ({type(msg).__name__}): {e}")
+                logger.error(f"send BadRequest: {e}")
             return
-        except Exception as e:
-            logger.error(f"send error attempt {attempt+1}: {e}")
+        except TelegramError as e:
+            logger.error(f"send error attempt {attempt + 1}: {e}")
             return
 
 
@@ -128,26 +133,24 @@ async def edit(query, text: str, **kwargs) -> None:
         except BadRequest as e:
             err = str(e).lower()
             if "not modified" in err:
-                return   # текст не изменился — ок
+                return
             if "message to edit not found" in err or "message can't be edited" in err:
-                # Сообщение удалено — отправляем новым
                 try:
                     msg = query.message
                     if msg:
-                        kw2 = dict(kwargs)
-                        await msg.reply_text(text, **kw2)
-                except Exception:
+                        await msg.reply_text(text, **kwargs)
+                except TelegramError:
                     pass
                 return
             if "parse" in err and "parse_mode" in kwargs:
                 kw2 = {k: v for k, v in kwargs.items() if k != "parse_mode"}
                 try:
                     await query.edit_message_text(text, **kw2)
-                except Exception:
+                except TelegramError:
                     pass
                 return
             logger.error(f"edit BadRequest: {e}")
             return
-        except Exception as e:
+        except TelegramError as e:
             logger.error(f"edit error: {e}")
             return

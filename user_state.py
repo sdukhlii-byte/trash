@@ -2,30 +2,30 @@
 user_state.py — машина состояний пользователя.
 
 Состояния:
-  NEW        — не прошёл онбординг (нет профиля)
-  ONBOARDED  — профиль есть, нет доступа, триал ещё не использован
+  NEW        — не прошёл онбординг
+  ONBOARDED  — профиль есть, нет доступа, триал не использован
   TRIAL      — активный пробный период
   SUBSCRIBED — активная оплаченная подписка
-  EXPIRED    — был доступ (триал или подписка), истёк
+  EXPIRED    — был доступ, истёк
 
-Переходы:
-  NEW → ONBOARDED (после онбординга)
-  ONBOARDED → TRIAL (активировал триал)
-  ONBOARDED → SUBSCRIBED (сразу оплатил)
-  TRIAL → SUBSCRIBED (оплатил во время триала)
-  TRIAL → EXPIRED (триал истёк без оплаты)
-  SUBSCRIBED → EXPIRED (подписка истекла)
-  EXPIRED → SUBSCRIBED (оплатил снова)
+Изменения v2:
+- Кэш состояния в Redis (TTL 60 сек).
+  Было: 5–6 DB/Redis запросов на каждый text/button.
+  Стало: 1 Redis GET на горячем пути; полный расчёт только при промахе кэша.
+- invalidate_state_cache() — вызывается при активации триала и оплате.
 """
-
 from enum import Enum
 from datetime import datetime, timezone
+import json
 import logging
 
-from db import is_onboarded, get_profile
+from db import is_onboarded, get_profile, kv_get, kv_set, kv_del
 from lava_payments import get_subscription, get_trial, has_used_trial
 
 logger = logging.getLogger(__name__)
+
+STATE_CACHE_TTL = 60   # секунд
+_STATE_KEY = "__user_state_cache__"
 
 
 class UserState(Enum):
@@ -38,28 +38,45 @@ class UserState(Enum):
 
 async def get_user_state(user_id: int) -> UserState:
     """
-    Определяет текущее состояние пользователя.
-    Единая точка правды — вызывается из всех точек входа.
-    При недоступной БД возвращает NEW (безопасный дефолт).
+    Единая точка определения состояния.
+    Сначала проверяем кэш — если промах, считаем из БД и кладём в кэш.
     """
     try:
-        return await _get_user_state_inner(user_id)
+        # 1. Быстрый путь: кэш
+        cached = await kv_get(user_id, _STATE_KEY)
+        if cached:
+            try:
+                return UserState(cached)
+            except ValueError:
+                pass  # невалидное значение — пересчитаем
+
+        # 2. Медленный путь: расчёт из БД
+        state = await _compute_user_state(user_id)
+
+        # 3. Кэшируем (не кэшируем NEW — до онбординга состояние может меняться быстро)
+        if state != UserState.NEW:
+            await kv_set(user_id, _STATE_KEY, state.value, ttl=STATE_CACHE_TTL)
+
+        return state
     except Exception as e:
         logger.error(f"get_user_state error uid={user_id}: {e}", exc_info=True)
-        return UserState.NEW  # безопасный дефолт — покажет онбординг/paywall
+        return UserState.NEW
 
 
-async def _get_user_state_inner(user_id: int) -> UserState:
+async def invalidate_state_cache(user_id: int) -> None:
+    """Сбросить кэш при любом событии меняющем состояние (оплата, триал, онбординг)."""
+    await kv_del(user_id, _STATE_KEY)
+    logger.debug(f"State cache invalidated for user {user_id}")
+
+
+async def _compute_user_state(user_id: int) -> UserState:
     now = datetime.now(timezone.utc)
 
-    # 1. Проверяем онбординг
+    # 1. Онбординг
     if not await is_onboarded(user_id):
         p = await get_profile(user_id)
         if not p.get("niche"):
             return UserState.NEW
-        # BUG FIX: has niche but not flagged onboarded (edge case: Redis key loss after restart).
-        # _route_inner already heals this by setting onboarded=True, but the state machine
-        # must not fall through to subscription checks — return ONBOARDED directly.
         return UserState.ONBOARDED
 
     # 2. Активная подписка
@@ -72,12 +89,11 @@ async def _get_user_state_inner(user_id: int) -> UserState:
     if trial:
         return UserState.TRIAL
 
-    # 4. Был ли вообще доступ (триал или подписка когда-либо)
+    # 4. Был ли когда-либо доступ
     used_trial = await has_used_trial(user_id)
     if used_trial:
         return UserState.EXPIRED
 
-    # Проверяем была ли подписка (в таблице subscriptions, статус cancelled/expired)
     from db import _get_pool
     pool = _get_pool()
     async with pool.acquire() as conn:
@@ -87,10 +103,8 @@ async def _get_user_state_inner(user_id: int) -> UserState:
     if had_sub:
         return UserState.EXPIRED
 
-    # 5. Онбординг пройден, но ни триала ни подписки не было
     return UserState.ONBOARDED
 
 
 def has_access(state: UserState) -> bool:
-    """Есть ли у пользователя доступ к функциям бота."""
     return state in (UserState.TRIAL, UserState.SUBSCRIBED)

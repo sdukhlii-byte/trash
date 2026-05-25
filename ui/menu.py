@@ -1,0 +1,118 @@
+"""
+ui/menu.py — главное меню бота.
+
+Изменения v2:
+- 2-уровневое меню: 10 кнопок на первом уровне вместо 18.
+  Пользователь не перегружен — видит 4 главных инструмента + 3 служебных.
+- "← Меню" НЕ очищает сессии агентов. Очистка происходит только при
+  явном старте нового агента.
+- При наличии активной незавершённой сессии — показывает баннер "Продолжить?"
+"""
+import logging
+
+from telegram import Update
+from telegram.error import TelegramError
+
+from db import kv_get, kv_set, get_agent_session
+from utils import send, kb
+
+logger = logging.getLogger(__name__)
+
+
+def main_menu_kb() -> object:
+    """Компактное главное меню — 4 главных + 6 служебных."""
+    return kb(
+        ["✍️ Написать пост|agent_start_post",       "🎬 Рилс + хуки|flow_reels_short"],
+        ["🎠 Карусель|flow_carousel",                "🔥 Прогрев|agent_start_warmup"],
+        ["📸 Сторис|agent_start_stories",            "🎙 Talking Head|agent_start_talking_head"],
+        ["🧩 Ещё инструменты|menu_more"],
+        ["🗂 Мои материалы|my_results",              "💬 Спроси Миру|mode_chat"],
+        ["👤 Кабинет|sub_cabinet",                   "🆘 Поддержка|support"],
+    )
+
+
+def more_menu_kb() -> object:
+    """Расширенное меню — все инструменты."""
+    return kb(
+        ["🎭 Анимация|agent_start_cartoon",           "🔄 Адаптация рилса|agent_start_reels_adapt"],
+        ["📅 Контент-план TG|agent_start_tg_plan",    "🔎 Разбор конкурента|agent_start_competitor"],
+        ["🔍 Разбор профиля|agent_start_profile",     "🧠 Мозговой штурм|quick_ideas"],
+        ["🗓 Планировщик|planner_show",               "☀️ Утренний брифинг|daily_menu"],
+        ["📈 Мой прогресс|my_stats"],
+        ["← Главное меню|menu_main"],
+    )
+
+
+def model_kb(current: str) -> object:
+    rows = []
+    for key, name in {"claude": "Claude Sonnet", "gpt4": "GPT-4o", "grok": "Grok 3 Mini"}.items():
+        check = "✓ " if key == current else ""
+        rows.append([f"{check}{name}|model_{key}"])
+    rows.append(["← Меню|menu_main"])
+    return kb(*rows)
+
+
+async def show_menu(update: Update, user_id: int) -> None:
+    """
+    Показывает главное меню.
+    Всегда редактирует одно сохранённое сообщение (не спамит).
+    НЕ трогает агент-сессии.
+    """
+    stored_raw = await kv_get(user_id, "__menu_msg_id__")
+    if stored_raw:
+        try:
+            await update.effective_chat.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=int(stored_raw),
+                text="Что делаем? 👇",
+                reply_markup=main_menu_kb(),
+            )
+            return
+        except TelegramError:
+            pass
+
+    sent = await update.effective_chat.send_message(
+        "Что делаем? 👇", reply_markup=main_menu_kb()
+    )
+    await kv_set(user_id, "__menu_msg_id__", str(sent.message_id))
+
+
+async def show_more_menu(update, query) -> None:
+    """Расширенное меню — вызывается по кнопке 'Ещё инструменты'."""
+    from utils import edit
+    await edit(query, "Все инструменты 👇", reply_markup=more_menu_kb())
+
+
+async def maybe_show_resume_banner(update: Update, user_id: int) -> bool:
+    """
+    Если у пользователя есть незавершённая сессия агента — показывает баннер
+    с предложением продолжить или начать новое.
+    Возвращает True если баннер показан (caller должен прервать normal flow).
+    """
+    active = await kv_get(user_id, "__active_agent__")
+    if not active:
+        return False
+
+    session = await get_agent_session(user_id, active)
+    if not session:
+        return False
+
+    step = session.get("step", "")
+    if step in ("initial", "interview", "pick", "await_photos", "await_details_text"):
+        import agents as ag
+        spec = ag.get_spec(active)
+        name = spec.name if spec else active
+        await send(
+            update,
+            f"⏸ *У тебя незавершённая работа*\n\n"
+            f"_{name}_ — вопросы ещё не закончены.\n\n"
+            f"Продолжить или начать новую задачу?",
+            parse_mode="Markdown",
+            reply_markup=kb(
+                [f"🔙 Продолжить {name}|resume_agent_{active}"],
+                ["🆕 Начать новую задачу|menu_main_clear"],
+            ),
+        )
+        return True
+
+    return False
