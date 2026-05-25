@@ -419,8 +419,24 @@ async def get_trial_expiring_soon() -> list[int]:
 
 async def send_push(bot: Bot, user_id: int, text: str,
                     buttons: list | None = None) -> bool:
-    """Отправляет пуш юзеру. Возвращает False если юзер заблокировал бота."""
+    """
+    Отправляет пуш юзеру. Возвращает False если юзер заблокировал бота.
+    Автоматически добавляет имя в начало если оно есть в профиле.
+    """
     try:
+        # Персонализация: добавляем имя если не начинается обращением
+        try:
+            from db import get_user_name
+            name = await get_user_name(user_id)
+            if name and not text.startswith(name):
+                # Только если текст начинается со строчной буквы или слова типа "Ты", "Знаешь"
+                # Не добавляем если уже есть обращение
+                import re
+                if re.match(r'^[А-ЯЁA-Z]', text) and len(name) > 0:
+                    text = f"{name}, {text[0].lower()}{text[1:]}"
+        except Exception:
+            pass
+
         reply_markup = None
         if buttons:
             reply_markup = InlineKeyboardMarkup(buttons)

@@ -538,9 +538,13 @@ async def pregen_digest(user_id: int) -> str | None:
     Пре-генерирует дайджест и кладёт в Redis.
     Вызывается из batch-задания в 06:00 UTC — до того как пользователи просыпаются.
     """
+    from db import get_user_name
     profile = await get_profile(user_id)
+    name    = await get_user_name(user_id)
     today   = datetime.date.today().strftime("%d %B")
+    name_line = f"Имя пользователя: {name}\n" if name else ""
     prompt  = (
+        f"{name_line}"
         f"Ниша: {profile.get('niche', 'эксперт')}\n"
         f"Аудитория: {profile.get('audience', 'не указана')}\n"
         f"Тон: {profile.get('tone', 'дружелюбный')}\n"

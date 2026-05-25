@@ -78,9 +78,15 @@ _MENU_PROMPTS_RETURN = [
 ]
 
 
-def menu_prompt(returning: bool = False) -> str:
+def menu_prompt(returning: bool = False, name: str = "") -> str:
+    n = f", {name.split()[0]}" if name else ""
     if returning:
-        return random.choice(_MENU_PROMPTS_RETURN)
+        opts = [
+            f"С возвращением{n}! Продолжаем?",
+            f"О, ты вернулась{n}. Что дальше?",
+            f"Снова здесь{n} — хорошо. Что делаем?",
+        ]
+        return random.choice(opts)
     h = _h()
     if 5 <= h < 12:
         return random.choice(_MENU_PROMPTS_MORNING)

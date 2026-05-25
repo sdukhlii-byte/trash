@@ -103,6 +103,8 @@ async def show_home(update: Update, user_id: int) -> None:
 
         from ui.mira_voice import menu_prompt
         from ui.progress_bar import _bar, materials_count
+        from db import get_user_name
+        _uname = await get_user_name(user_id)
 
         lines = []
 
@@ -143,7 +145,7 @@ async def show_home(update: Update, user_id: int) -> None:
             )
 
         # Живой промпт вместо "Что делаем? 👇"
-        lines.append(f"\n{menu_prompt()}")
+        lines.append(f"\n{menu_prompt(name=_uname)}")
 
         await send(
             update,

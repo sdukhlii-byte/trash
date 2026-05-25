@@ -52,8 +52,12 @@ async def _send_onboarding_nudge(bot, user_id: int) -> None:
         works   = intel.get("works", "")
         example = works.split("\n")[1].strip("• ").split("\n")[0] if works else "создания контента"
 
+        from db import get_user_name
+        _name = await get_user_name(user_id)
+        _hi   = f"{_name}, кстати." if _name else "Кстати."
+
         text = (
-            f"Кстати.\n\n"
+            f"{_hi}\n\n"
             f"Для твоей ниши «{niche[:30]}» лучше всего работает: {example.lower()}\n\n"
             f"Хочешь посмотреть как Мира напишет это конкретно под твою аудиторию?\n\n"
             f"*7 дней бесплатно — без карты.*"
@@ -113,17 +117,22 @@ async def _send_day2_nudge(bot, user_id: int) -> None:
         used_agents = {r["agent_key"] for r in results}
         untried     = _get_untried_recommendation(niche, used_agents)
 
+        from db import get_user_name
+        _name = await get_user_name(user_id)
+
         if results:
             created_count = len(results)
             noun = "материал" if created_count == 1 else "материала"
+            _intro = f"{_name}, вчера" if _name else "Вчера"
             text = (
-                f"Вчера создала {created_count} {noun}.\n\n"
+                f"{_intro} создала {created_count} {noun}.\n\n"
                 f"Есть ещё кое-что под твою нишу что стоит попробовать: {untried['name']}.\n\n"
                 f"_{untried['pitch']}_"
             )
         else:
+            _intro = f"{_name}, триал" if _name else "Триал"
             text = (
-                f"Триал активирован, но ты ещё ничего не создала.\n\n"
+                f"{_intro} активирован, но ты ещё ничего не создала.\n\n"
                 f"Самое быстрое с чего начать для «{niche[:30]}» — {untried['name']}.\n\n"
                 f"_{untried['pitch']}_"
             )

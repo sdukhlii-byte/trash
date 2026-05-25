@@ -185,6 +185,19 @@ async def save_profile(user_id: int, profile: dict) -> None:
     await kv_set(user_id, "__profile__", json.dumps(profile, ensure_ascii=False))
 
 
+async def get_user_name(user_id: int) -> str:
+    """
+    Возвращает имя пользователя из профиля.
+    Пустая строка если не сохранено.
+    Используй везде где Мира обращается к пользователю лично.
+    """
+    try:
+        p = await get_profile(user_id)
+        return p.get("first_name", "")
+    except Exception:
+        return ""
+
+
 async def is_onboarded(user_id: int) -> bool:
     p = await get_profile(user_id)
     return bool(p.get("onboarded"))

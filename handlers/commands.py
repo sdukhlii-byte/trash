@@ -53,10 +53,22 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         new_state = {"step": 0, "data": {}}
         await save_onboarding_state(user_id, new_state)
 
+        # Сохраняем имя в профиль сразу — чтобы использовать везде
+        tg_user = update.effective_user
+        first_name = tg_user.first_name or ""
+        if first_name:
+            try:
+                from db import get_profile, save_profile
+                p = await get_profile(user_id)
+                if not p.get("first_name"):
+                    p["first_name"] = first_name
+                    await save_profile(user_id, p)
+            except Exception:
+                pass
+
         # Живое первое сообщение с приветствием по времени суток
         from ui.mira_voice import greet
-        first_name = update.effective_user.first_name or ""
-        greeting   = greet(first_name)
+        greeting = greet(first_name)
         from config import MIRA_INTRO
         intro = f"{greeting}\n\n{MIRA_INTRO}"
         await send(update, intro)
