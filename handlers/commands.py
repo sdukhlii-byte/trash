@@ -151,18 +151,11 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             total_results = await conn.fetchval("SELECT COUNT(*) FROM results") or 0
         await send(
             update,
-            f"📊 *Статистика*
-
-"
-            f"Пользователей: *{total_users}*
-"
-            f"Активных подписок: *{total_subs}*
-"
-            f"Триалов: *{total_trial}*
-"
-            f"Создано материалов: *{total_results}*
-
-"
+            f"📊 *Статистика*\n\n"
+            f"Пользователей: *{total_users}*\n"
+            f"Активных подписок: *{total_subs}*\n"
+            f"Триалов: *{total_trial}*\n"
+            f"Создано материалов: *{total_results}*\n\n"
             f"CR триал→оплата: *{round(total_subs/total_trial*100 if total_trial else 0)}%*",
             parse_mode="Markdown",
         )
@@ -170,11 +163,8 @@ async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await send(
             update,
-            "*Admin команды:*
-
-"
-            "/admin utm — статистика по источникам трафика
-"
+            "*Admin команды:*\n\n"
+            "/admin utm — статистика по источникам трафика\n"
             "/admin stats — общая статистика",
             parse_mode="Markdown",
         )
