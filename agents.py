@@ -999,6 +999,34 @@ async def generate(update: Update, user_id: int,
 
     sys_prompt = base_sys + voice_ctx + niche_ctx + cip_ctx + platform_filter + knowledge_layer
 
+    # ── Image context: если есть OCR-текст со скриншота — инжектим в промпт ──
+    image_ctx = ""
+    try:
+        from db import kv_get as _kv_get
+        raw_img_ctx = await _kv_get(user_id, "__image_context__")
+        if raw_img_ctx:
+            img_data = __import__("json").loads(raw_img_ctx)
+            extracted = img_data.get("extracted_text", "")
+            intent    = img_data.get("intent", "reference")
+            if extracted:
+                _intent_labels = {
+                    "post_example":    "примеры постов пользователя",
+                    "profile_audit":   "скриншот профиля для разбора",
+                    "competitor_post": "пост конкурента для анализа",
+                    "viral_reel":      "вирусный рилс для адаптации",
+                    "reference":       "дополнительный контекст",
+                }
+                _label = _intent_labels.get(intent, "дополнительный контекст")
+                image_ctx = (
+                    f"\n\nКОНТЕКСТ ИЗ СКРИНШОТА ({_label}):\n"
+                    f"{extracted[:2000]}\n"
+                    f"Учитывай этот текст при генерации."
+                )
+    except Exception as _img_err:
+        logger.debug(f"image_context inject skipped: {_img_err}")
+
+    sys_prompt = sys_prompt + image_ctx
+
     try:
         photos = [[b64, mime] for b64, mime in session.get("photos", [])]
         if photos:

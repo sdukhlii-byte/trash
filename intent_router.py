@@ -455,3 +455,70 @@ _AGENT_SIBLINGS: dict[str, list[str]] = {
 
 def get_agent_suggestions(agent_key: str) -> list[str]:
     return _AGENT_SIBLINGS.get(agent_key, ["post", "quick_ideas"])
+
+
+# ── Image intent classification ───────────────────────────────────────────────
+
+IMAGE_CONTEXT_PROMPT = """\
+Пользователь прислал скриншот. Извлечённый текст: {extracted_text}
+
+Определи намерение пользователя по контексту:
+- "post_example" — это примеры постов для обучения голосу / анализа стиля
+- "profile_audit" — скриншот профиля (аккаунта, шапки) для разбора
+- "competitor_post" — пост конкурента или другого автора для анализа или адаптации
+- "viral_reel" — вирусный рилс или сценарий для адаптации под свою нишу
+- "reference" — просто контекст / справка / материал для текущей задачи
+
+Верни ТОЛЬКО JSON без markdown-блоков: {"intent": "...", "confidence": 0.0}
+"""
+
+_IMAGE_INTENT_AGENT_MAP = {
+    "post_example":    "post",
+    "profile_audit":   "profile",
+    "competitor_post": "competitor",
+    "viral_reel":      "reels_adapt",
+    "reference":       "chat",
+}
+
+
+@dataclass
+class ImageIntentResult:
+    intent: str           # post_example / profile_audit / competitor_post / viral_reel / reference
+    agent: str            # соответствующий агент
+    confidence: float
+    extracted_text: str   # OCR-текст с изображения
+
+
+async def classify_image_intent(extracted_text: str) -> ImageIntentResult:
+    """
+    Классифицирует намерение пользователя по OCR-тексту скриншота.
+    Возвращает ImageIntentResult с intent, agent и confidence.
+    """
+    from llm import complete
+
+    prompt = IMAGE_CONTEXT_PROMPT.format(extracted_text=extracted_text[:1500])
+    try:
+        raw = await complete(
+            system="Ты классификатор намерений. Отвечай только JSON.",
+            user=prompt,
+            model_key="gpt4",
+            temperature=0.1,
+            max_tokens=100,
+        )
+        # Убираем markdown-обёртку если есть
+        raw_clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        data = json.loads(raw_clean)
+        intent = data.get("intent", "reference")
+        confidence = float(data.get("confidence", 0.5))
+    except Exception as e:
+        logger.warning(f"classify_image_intent parse error: {e}, raw={raw!r}")
+        intent = "reference"
+        confidence = 0.3
+
+    agent = _IMAGE_INTENT_AGENT_MAP.get(intent, "chat")
+    return ImageIntentResult(
+        intent=intent,
+        agent=agent,
+        confidence=confidence,
+        extracted_text=extracted_text,
+    )

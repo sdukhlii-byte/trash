@@ -481,6 +481,21 @@ async def _handle_photo_universal(update: Update, user_id: int, caption: str) ->
         await safe_delete(status)
         await send(update, "Фото не открылось — попробуй ещё раз 🔁", reply_markup=main_menu_kb())
         return
+
+    # Классифицируем контекст скриншота и сохраняем для агентов
+    try:
+        from intent_router import classify_image_intent
+        img_intent = await classify_image_intent(result)
+        await kv_set(user_id, "__image_context__", json.dumps({
+            "intent":         img_intent.intent,
+            "agent":          img_intent.agent,
+            "confidence":     img_intent.confidence,
+            "extracted_text": result,
+        }, ensure_ascii=False), ttl=3600)
+        logger.info(f"[image_intent] user={user_id} intent={img_intent.intent} conf={img_intent.confidence:.2f}")
+    except Exception as e:
+        logger.debug(f"classify_image_intent skipped: {e}")
+
     await safe_delete(status)
     await send(update, f"🖼 {result}", reply_markup=kb(["← Меню|menu_main"]))
 
