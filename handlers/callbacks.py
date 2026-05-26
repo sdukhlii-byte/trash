@@ -806,11 +806,12 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
     if data == "daily_push_time":
         from db import save_agent_session as _sas
+        from utils import send as _send, kb as _kb
         await _sas(user_id, "daily_push_time_flow", {"step": "await_time"})
-        await send(update,
-                   "⏰ Напиши время для утреннего пуша:\n_Например: 9:00 или 8:30_",
-                   parse_mode="Markdown",
-                   reply_markup=kb(["← Назад|daily_push_menu"]))
+        await _send(update,
+                    "⏰ Напиши время для утреннего пуша:\n_Например: 9:00 или 8:30_",
+                    parse_mode="Markdown",
+                    reply_markup=_kb(["← Назад|daily_push_menu"]))
         return
 
     if data == "daily_push_test":
