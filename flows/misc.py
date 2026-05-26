@@ -480,14 +480,36 @@ async def planner_show(update: Update, user_id: int) -> None:
 
 async def planner_gen_week(update: Update, user_id: int) -> None:
     profile = await get_profile(user_id)
+    session = await get_agent_session(user_id, _PLANNER_KEY) or {}
+
+    # If we don't have the week goal yet — ask for it first
+    if not session.get("week_goal"):
+        await save_agent_session(user_id, _PLANNER_KEY, {"step": "await_week_goal"})
+        await send(
+            update,
+            "🗓 *План на неделю*\n\nЧтобы план был стратегическим, а не просто списком — один вопрос:\n\n"
+            "*Что должна почувствовать или сделать аудитория в конце этой недели?*\n\n"
+            "_Например: записаться на консультацию / понять что им нужна твоя услуга / увидеть тебя как эксперта в X_\n\n"
+            "Если сейчас идёт прогрев или запуск — напиши об этом тоже.",
+            parse_mode="Markdown",
+            reply_markup=kb(["⏭ Без цели, просто план|planner_week_skip", "← Планировщик|planner_show"]),
+        )
+        return
+
     today = datetime.date.today()
     dates = [(today + datetime.timedelta(days=i)).strftime("%d.%m (%a)") for i in range(7)]
+    week_goal = session.get("week_goal", "")
+    active_launch = session.get("active_launch", "")
     prompt = (
         f"Ниша: {profile.get('niche', 'не указана')}\n"
-        f"Аудитория: {profile.get('audience', 'не указана')}\n\n"
-        f"Даты: {', '.join(dates)}\n\nСоставь план на 7 дней."
+        f"Аудитория: {profile.get('audience', 'не указана')}\n"
+        f"Тон: {profile.get('tone', 'живой')}\n\n"
+        f"Цель недели (что должна почувствовать/сделать аудитория): {week_goal}\n"
+        + (f"Активный запуск/прогрев: {active_launch}\n" if active_launch else "")
+        + f"\nДаты: {', '.join(dates)}\n\nСоставь стратегический план на 7 дней с нарративной дугой."
     )
-    status = await update.effective_chat.send_message("Составляю план на неделю...")
+    await clear_agent_session(user_id, _PLANNER_KEY)
+    status = await update.effective_chat.send_message("Выстраиваю нарратив недели...")
     _tt = asyncio.create_task(_typing_loop(update.effective_chat))
     try:
         result = await complete(protect(user_id, PLANNER_IDEAS_SYSTEM), prompt, temperature=0.85)
@@ -495,7 +517,7 @@ async def planner_gen_week(update: Update, user_id: int) -> None:
         logger.error(f"[planner] week error: {e}")
         result = None
     finally:
-        _tt.cancel()  # BUG #1 FIX: always cancel, even on exception
+        _tt.cancel()
     await safe_delete(status)
     if not result:
         await send(update, "Связь прервалась — жми ещё раз 🔁",
@@ -517,7 +539,17 @@ async def planner_add_start(update: Update, user_id: int) -> None:
 
 async def route_planner_text(update: Update, user_id: int, text: str, s: dict) -> bool:
     step = s.get("step", "")
-    if step == "await_date":
+    if step == "await_week_goal":
+        # User answered the week goal question — store and generate
+        s["week_goal"] = text.strip()
+        # Check if launch mentioned
+        lower = text.lower()
+        if any(w in lower for w in ["прогрев", "запуск", "лонч", "продажи", "оффер"]):
+            s["active_launch"] = text.strip()
+        await save_agent_session(user_id, _PLANNER_KEY, s)
+        await planner_gen_week(update, user_id)
+        return True
+    elif step == "await_date":
         s["date"] = text.strip()
         s["step"] = "await_platform"
         await save_agent_session(user_id, _PLANNER_KEY, s)

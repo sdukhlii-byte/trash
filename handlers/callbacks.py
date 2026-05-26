@@ -631,6 +631,14 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await planner_add_start(update, user_id)
         return
     if data == "planner_week":
+        from db import clear_agent_session as _cas
+        await _cas(user_id, "planner_flow")
+        await planner_gen_week(update, user_id)
+        return
+    if data == "planner_week_skip":
+        # User skipped week goal — generate without narrative context
+        from db import save_agent_session as _sas
+        await _sas(user_id, "planner_flow", {"week_goal": "без конкретной цели — сбалансированный план"})
         await planner_gen_week(update, user_id)
         return
     if data == "planner_done":
