@@ -176,13 +176,14 @@ async def show_home(update: Update, user_id: int) -> None:
 
 def _home_kb(total: int, voice_signals: int):
     rows = [
+        ["🎙 Расскажи голосом — так быстрее|voice_hint"],
         ["✍️ Написать пост|agent_start_post",    "🎬 Рилс + хуки|flow_reels_short"],
         ["🎠 Карусель|flow_carousel",             "🔥 Прогрев|agent_start_warmup"],
         ["🧩 Все инструменты|menu_more"],
     ]
 
     if voice_signals < 3:
-        rows.insert(0, ["🎤 Научить Миру моему стилю|style_menu"])
+        rows.insert(1, ["🎤 Научить Миру моему стилю|style_menu"])
 
     rows += [
         ["📚 Мои материалы|my_results",           "📈 Прогресс|my_stats"],

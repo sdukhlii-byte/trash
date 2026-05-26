@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 def main_menu_kb() -> object:
-    """Компактное главное меню — 4 главных + 6 служебных."""
+    """Компактное главное меню — голос первым, потом инструменты."""
     return kb(
+        ["🎙 Расскажи голосом — так быстрее|voice_hint"],
         ["✍️ Написать пост|agent_start_post",       "🎬 Рилс + хуки|flow_reels_short"],
         ["🎠 Карусель|flow_carousel",                "🔥 Прогрев|agent_start_warmup"],
-        ["📸 Сторис|agent_start_stories",            "🎙 Talking Head|agent_start_talking_head"],
+        ["📸 Сторис|agent_start_stories",            "Talking Head|agent_start_talking_head"],
         ["🧩 Ещё инструменты|menu_more"],
         ["🗂 Мои материалы|my_results",              "💬 Спроси Миру|mode_chat"],
         ["👤 Кабинет|sub_cabinet",                   "🆘 Поддержка|support"],

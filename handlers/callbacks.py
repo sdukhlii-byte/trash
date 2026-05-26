@@ -248,6 +248,18 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             ]))
         return
 
+    if data == "voice_hint":
+        await edit(
+            query,
+            "🎙 *Просто запиши голосовое сообщение*\n\n"
+            "Расскажи что хочешь создать — пост, рилс, прогрев, карусель.\n"
+            "Говори как хочешь, хаотично или кратко — Мира разберётся и сделает.\n\n"
+            "_Голосовые работают так же хорошо, как текст — часто лучше._",
+            parse_mode="Markdown",
+            reply_markup=kb(["← Меню|menu_main"]),
+        )
+        return
+
     if data == "menu_main":
         from ui.home import show_home
         # Пробуем отредактировать текущее сообщение — убираем кнопки
