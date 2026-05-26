@@ -8,7 +8,7 @@ export const redis = new Redis(process.env.REDIS_URL!, {
   lazyConnect: true,
 })
 
-redis.on('error', (err) => logger.error('Redis error:', err))
+redis.on('error', (err) => logger.error({ err }, 'Redis error'))
 redis.on('connect', () => logger.debug('Redis connected'))
 
 // ── Typed helpers ─────────────────────────────────────────────────────────────
