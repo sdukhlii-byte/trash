@@ -525,6 +525,9 @@ async def get_cip(user_id: int) -> dict:
         "content_format_affinity": {},         # {"carousel": 0.8, "reels": 0.6}
         "emotional_rhythm": [],                # последние 10 эмоций контента
         "warmup_neutralized_objections": [],   # возражения нейтрализованные в последнем прогреве
+        "narrative_continuity": "",            # незакрытые истории / темы с высоким откликом которые ждут продолжения
+        "audience_language_patterns": "",      # язык которым аудитория сама описывает свои боли — из комментариев и интервью
+        "creator_voice_signature": "",         # конкретные речевые паттерны автора: ритм, структура, лексика
     }
 
 

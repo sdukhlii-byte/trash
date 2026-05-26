@@ -134,6 +134,21 @@ _AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
         "tactics":      "Перепиши раздел 'Стратегия переманивания аудитории': укажи конкретные темы постов, форматы и дни публикации — а не общие рекомендации.",
         "positioning":  "Добавь или перепиши раздел 'Дифференцирующая фраза': одно предложение которое автор может использовать в шапке профиля или в контенте чтобы чётко отличаться от этого конкурента. Формат: 'В отличие от [конкурент], я [конкретное отличие] — потому что [причина важная для аудитории].'",
     },
+    "carousel": {
+        "softer":       "Смягчи тон карусели: более тёплые заголовки слайдов, меньше давления.",
+        "bolder":       "Сделай карусель острее: провокационнее заголовки слайдов, сильнее первый слайд.",
+        "shorter":      "Сократи каждый слайд до 2-3 строк. Текст читается за 2 секунды — проверь каждый.",
+        "add_detail":   "Добавь один слайд с конкретной цифрой, кейсом или примером — в середину карусели.",
+        "stronger_cta": "Перепиши последний слайд: дай чёткую причину сохранить эту карусель + конкретное следующее действие.",
+        # Carousel-specific
+        "save_moment":  (
+            "Найди в этой карусели главный 'save-момент' — то из-за чего человек захочет сохранить её. "
+            "Если такого момента нет — добавь его: это может быть чеклист, мини-инструкция, неочевидный факт или shareable цитата на отдельном слайде. "
+            "Если он есть но слабый — усиль его. "
+            "Объясни в одной строке ЧТО именно ты изменил и ПОЧЕМУ это повысит save-rate. "
+            "Остальные слайды не трогай."
+        ),
+    },
 }
 
 
@@ -206,6 +221,14 @@ def _agent_edit_panel_kb(spec_key: str, completed: set | None = None,
             rows.append(["✂️ Сократить|ag_edit_shorter", "➕ Деталь|ag_edit_detail"])
         if "cta" not in done:
             rows.append(["💪 Усилить CTA|ag_edit_cta"])
+
+    elif spec_key == "carousel":
+        if "softer" not in done:
+            rows.append(["🎨 Мягче|ag_edit_softer", "🔥 Жёстче|ag_edit_bolder"])
+        if "shorter" not in done:
+            rows.append(["✂️ Сократить|ag_edit_shorter", "➕ Деталь|ag_edit_detail"])
+        if "save_moment" not in done:
+            rows.append(["🎯 Save-момент|ag_edit_save_moment"])
 
     else:
         # Default panel
@@ -1143,6 +1166,70 @@ async def _send_result(update: Update, result: str,
     except Exception:
         pass
 
+    # NARRATIVE CONTINUITY TRACKER (#12) — после warmup и stories
+    # Извлекает незакрытые истории/темы с высоким потенциалом продолжения
+    try:
+        if spec.key in ("warmup", "stories"):
+            from db import get_cip as _gcip_nc, save_cip as _sc_nc
+            _cip_nc = await _gcip_nc(user_id)
+            _nc_sys = (
+                "Из этого контента извлеки незакрытые истории или темы которые явно ждут продолжения "
+                "(часть 1, 'об этом подробнее расскажу', незавершённый нарратив, тема которая вызовет вопросы). "
+                "Ответь ТОЛЬКО JSON: {\"open_threads\": [\"краткое описание незакрытой истории\"]}. "
+                "Если таких нет — {\"open_threads\": []}. Максимум 3."
+            )
+            _nc_raw = await llm.complete(_nc_sys, result[:1500], temperature=0.0)
+            import json as _json_nc
+            _nc_s = _nc_raw.find("{")
+            _nc_e = _nc_raw.rfind("}") + 1
+            if _nc_s >= 0 and _nc_e > _nc_s:
+                _nc_data = _json_nc.loads(_nc_raw[_nc_s:_nc_e])
+                _threads = _nc_data.get("open_threads", [])
+                if _threads:
+                    _existing_nc = _cip_nc.get("narrative_continuity", "")
+                    _new_nc = " | ".join(_threads)
+                    # Merge with existing, keep last 5 threads max
+                    _all_nc = [t.strip() for t in _existing_nc.split("|") if t.strip()] + _threads
+                    _cip_nc["narrative_continuity"] = " | ".join(_all_nc[-5:])[:400]
+                    await _sc_nc(user_id, _cip_nc)
+    except Exception:
+        pass
+
+    # AUDIENCE FATIGUE DETECTOR (#24) — если последние 5 постов одной темы
+    try:
+        from db import get_results as _gr_fat, get_cip as _gcip_fat, save_cip as _sc_fat
+        _recent_fat = await _gr_fat(user_id, limit=6)
+        if len(_recent_fat) >= 5:
+            _fat_topics = [r.get("agent_key", "") for r in _recent_fat[:5]]
+            # Check topic repetition via quick LLM call on last 5 contents
+            _fat_snippets = "\n---\n".join(
+                r.get("content", "")[:200] for r in _recent_fat[:5]
+            )
+            _fat_sys = (
+                "Проверь последние 5 единиц контента. Есть ли доминирующая тема которая повторяется "
+                "в 4 или 5 из них? Ответь JSON: "
+                "{\"fatigue\": true/false, \"dominant_theme\": \"тема или null\", "
+                "\"switch_suggestion\": \"конкретный альтернативный угол или null\"}. "
+                "Только JSON, без пояснений."
+            )
+            _fat_raw = await llm.complete(_fat_sys, _fat_snippets, temperature=0.0)
+            _fat_s = _fat_raw.find("{")
+            _fat_e = _fat_raw.rfind("}") + 1
+            if _fat_s >= 0 and _fat_e > _fat_s:
+                import json as _json_fat
+                _fat_data = _json_fat.loads(_fat_raw[_fat_s:_fat_e])
+                if _fat_data.get("fatigue") and _fat_data.get("dominant_theme"):
+                    _theme = _fat_data["dominant_theme"]
+                    _switch = _fat_data.get("switch_suggestion") or "другой формат или эмоцию"
+                    await send(
+                        update,
+                        f"👀 *Замечаю паттерн:* последние 5 материалов — все вокруг темы «{_theme[:60]}».\n"
+                        f"Аудитория может устать. Попробуй следующий через другой угол: _{_switch}_",
+                        parse_mode="Markdown",
+                    )
+    except Exception:
+        pass
+
     # Стикер/GIF при первой генерации
     try:
         from db import get_stats
@@ -1245,6 +1332,47 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     try:
         from flows.proactive import schedule_proactive_hint
         await schedule_proactive_hint(user_id, spec.key)
+    except Exception:
+        pass
+
+    # INTER-TOOL SUGGESTIONS (#29) — предлагаем смежный инструмент с сохранением контекста
+    try:
+        _INTER_TOOL_MAP = {
+            "reels_short":  ("carousel",     "Хочешь карусель на эту же тему? Сохраню контекст →", "💎 Карусель на эту тему|inter_tool_carousel"),
+            "carousel":     ("reels_short",  "Хочешь Рилс-хук для этой карусели?",                "🎬 Рилс-хук|inter_tool_reels_short"),
+            "warmup":       ("post",         "Хочешь экспертный пост чтобы поддержать прогрев?",  "📝 Пост поддержки|inter_tool_post"),
+            "stories":      ("reels_short",  "Хочешь Рилс по этой же теме?",                      "🎬 Рилс на эту тему|inter_tool_reels_short"),
+            "post":         ("carousel",     "Хочешь развернуть это в карусель?",                  "💎 Карусель|inter_tool_carousel"),
+            "profile":      ("competitor",   "Хочешь теперь разобрать конкурента рядом с тобой?", "🔍 Анализ конкурента|inter_tool_competitor"),
+        }
+        if spec.key in _INTER_TOOL_MAP:
+            _it_target, _it_text, _it_btn = _INTER_TOOL_MAP[spec.key]
+            # Only show if it's not dismissed already (simple: always show, no state)
+            await asyncio.sleep(0.8)
+            await send(
+                update,
+                f"💡 {_it_text}",
+                reply_markup=kb([_it_btn, "← Не сейчас|menu_main"]),
+            )
+    except Exception:
+        pass
+
+    # POST-PERFORMANCE FEEDBACK (#22) — кнопка «Результат» появляется через 24ч (3-е использование+)
+    # Планируем напоминание через KV — обработчик покажет кнопку при следующем входе
+    try:
+        import datetime as _dt
+        from db import kv_set as _kv_ppf, kv_get as _kv_get_ppf
+        _ppf_key = f"__ppf_pending_{spec.key}__"
+        _ppf_existing = await _kv_get_ppf(user_id, _ppf_key)
+        if not _ppf_existing:
+            # Schedule: store result_id + timestamp, show reminder on next /menu
+            _ppf_payload = {
+                "result_id": _result_id,
+                "spec_key": spec.key,
+                "scheduled_at": _dt.datetime.utcnow().isoformat(),
+            }
+            import json as _json_ppf
+            await _kv_ppf(user_id, _ppf_key, _json_ppf.dumps(_ppf_payload))
     except Exception:
         pass
 
