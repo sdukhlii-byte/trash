@@ -858,18 +858,45 @@ async def _daily_job(ctx) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def style_menu(update: Update, user_id: int) -> None:
+    from voice_learner import get_voice_stats
     examples = await get_style_examples(user_id)
-    count = len(examples)
+    ex_count = len(examples)
+    vs = await get_voice_stats(user_id)
+    signals = vs.get("total_signals", 0)
+
+    # Статус системы обучения — единый нарратив
+    if signals == 0 and ex_count == 0:
+        status = (
+            "Пока не знаю как ты пишешь.\n\n"
+            "Чем больше дашь — тем точнее буду попадать в твой голос с первого раза."
+        )
+    elif ex_count > 0 and signals < 5:
+        status = (
+            f"Есть {ex_count} {'пример' if ex_count == 1 else 'примера' if ex_count < 5 else 'примеров'} твоих постов "
+            f"и {signals} {'оценка' if signals == 1 else 'оценки' if signals < 5 else 'оценок'} результатов.\n\n"
+            "Хорошее начало. Чем больше оцениваешь результаты — тем точнее становлюсь."
+        )
+    else:
+        status = (
+            f"Примеров постов: *{ex_count}/10*\n"
+            f"Оценок результатов: *{signals}*\n\n"
+            "Чем больше оцениваешь — тем меньше правок нужно."
+        )
+
     text = (
-        f"📝 *Примеры стиля*\n\n"
-        f"Добавлено: *{count}/10*\n\n"
-        "Скинь 2-3 своих поста — агенты будут писать в твоём стиле.\n\n"
-        "_Примеры работают точнее чем «тон» в профиле: агент видит реальные тексты "
-        "и копирует структуру, лексику, ритм._"
+        f"✨ *Мой стиль*\n\n"
+        f"{status}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "*Два способа научить Миру:*\n\n"
+        "📝 *Скинь свои посты* — я буду писать твоими словами, "
+        "твоей структурой, твоим ритмом. Самый быстрый способ.\n\n"
+        "✅ *Оценивай результаты* — после каждого текста нажимай "
+        "«Звучит как я» или «Не совсем + объясни что не так». "
+        "Я запоминаю и корректирую."
     )
-    rows = [["➕ Добавить пример|style_add"]]
-    if count > 0:
-        rows.append(["👁 Посмотреть примеры|style_view", "🗑 Очистить|style_clear"])
+    rows = [["📝 Добавить свои посты|style_add"]]
+    if ex_count > 0:
+        rows.append(["👁 Посмотреть добавленные|style_view", "🗑 Очистить|style_clear"])
     rows.append(["← Кабинет|sub_cabinet"])
     await send(update, text, parse_mode="Markdown", reply_markup=kb(*rows))
 
@@ -878,11 +905,13 @@ async def style_add_start(update: Update, user_id: int) -> None:
     await save_agent_session(user_id, _STYLE_KEY, {"step": "await_example"})
     await send(
         update,
-        "✍️ *Добавь пример своего поста*\n\n"
-        "Скопируй и отправь текст поста — лучше целиком.\n"
-        "_Можно добавить до 10 примеров_",
+        "📝 *Добавь свой пост*\n\n"
+        "Скопируй и отправь текст — лучше целиком, без обрезки.\n\n"
+        "_Подойдёт любой пост который тебе нравится: "
+        "Мира запомнит структуру, лексику, длину абзацев, твои обороты.\n\n"
+        "Можно добавить до 10 постов._",
         parse_mode="Markdown",
-        reply_markup=kb(["← Кабинет|sub_cabinet"]),
+        reply_markup=kb(["← Назад|style_menu"]),
     )
 
 
@@ -891,10 +920,12 @@ async def style_save_example(update: Update, user_id: int, text: str) -> None:
     await clear_agent_session(user_id, _STYLE_KEY)
     await send(
         update,
-        f"✅ Пример добавлен! Всего: *{count}/10*\n\n"
-        "_Все агенты теперь учитывают твой стиль письма_",
+        f"✅ Добавила. Всего постов: *{count}/10*\n\n"
+        "_Теперь в каждой генерации буду смотреть на твои тексты "
+        "и писать так же — твоими словами, твоим ритмом._\n\n"
+        "Можно добавить ещё — чем больше примеров, тем точнее.",
         parse_mode="Markdown",
-        reply_markup=kb(["➕ Ещё пример|style_add", "← Меню|menu_main"]),
+        reply_markup=kb(["📝 Добавить ещё|style_add", "← Меню|menu_main"]),
     )
 
 

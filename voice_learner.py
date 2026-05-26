@@ -390,8 +390,8 @@ def voice_feedback_kb(result_id: int, extra_rows: list | None = None):
     """
     from utils import kb
     rows = [
-        [f"✅ Звучит как я|vf_yes_{result_id}",
-         f"✏️ Не совсем|vf_no_{result_id}"],
+        [f"✅ Мой голос|vf_yes_{result_id}",
+         f"✏️ Не моё — скажу что|vf_no_{result_id}"],
     ]
     if extra_rows:
         rows.extend(extra_rows)
@@ -456,9 +456,9 @@ async def handle_voice_feedback_no(
     await kv_set(user_id, _FEEDBACK_STEP_KEY, str(result_id), ttl=600)
     await send(
         update,
-        "Понятно, поправлю. Что именно не похоже на тебя?\n\n"
-        "_Напиши одним предложением — например: «слишком официально», "
-        "«длинные абзацы», «без юмора»_",
+        "Скажи одним предложением что не так.\n\n"
+        "_Например: «слишком официально», «длинные абзацы», «без юмора», «не мои слова»_\n\n"
+        "Я запомню — и в следующий раз буду точнее.",
         parse_mode="Markdown",
         reply_markup=kb(["← Пропустить|menu_main"]),
     )
