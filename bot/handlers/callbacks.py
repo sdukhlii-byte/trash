@@ -16,6 +16,7 @@ from db import (
     clear_all_agent_sessions, clear_onboarding_state, get_profile,
     kv_get, kv_set, kv_del, get_model, set_model,
     save_result, get_results, get_result_by_id, delete_result,
+    get_result_kb_state, mark_result_action_completed, reset_result_completed,
 )
 from user_state import get_user_state, has_access, UserState, invalidate_state_cache
 from lava_payments import (
@@ -50,9 +51,123 @@ from utils import send, edit, kb, safe_delete
 from security import ADMIN_ID
 from config import CAROUSEL_FORMATS_4, CAROUSEL_TRIGGERS_20, MODELS
 import agents as ag
+from callback_context import (
+    resolve_callback, validate_callback, mark_callback_used,
+    expire_result_callbacks,
+)
 
 logger = logging.getLogger(__name__)
 SUPPORT_USERNAME = os.environ.get("SUPPORT_USERNAME", "Stanley_Berks")
+
+
+async def _rebuild_and_edit_keyboard(query, user_id: int, result_id: int, tool_id: str) -> None:
+    """Перестраивает клавиатуру из актуального состояния result и редактирует сообщение."""
+    try:
+        updated = await get_result_kb_state(result_id)
+        if updated:
+            from ui.keyboards import build_result_keyboard
+            new_kb = await build_result_keyboard(user_id, updated, tool_id)
+            await query.message.edit_reply_markup(reply_markup=new_kb)
+    except Exception as e:
+        logger.debug(f"[scoped] rebuild_keyboard failed (non-critical): {e}")
+
+
+async def _route_scoped_action(
+    update, ctx, query, user_id: int, resolved, result_row: dict
+) -> None:
+    """
+    PHASE 4+5: Единая точка входа для всех scoped callbacks.
+    resolved: ResolvedCallback (tool_id уже заполнен из validate_callback)
+    result_row: dict из get_result_kb_state
+    """
+    from callback_context import ACTION_REGISTRY
+
+    action    = resolved.action
+    result_id = resolved.result_id
+    tool_id   = resolved.tool_id  # проставлен в validate_callback
+
+    # ── Reels ─────────────────────────────────────────────────────────────────
+    if action == "rs:softer":
+        await rs_edit_softer(update, user_id, result_id=result_id)
+
+    elif action == "rs:bolder":
+        await rs_edit_bolder(update, user_id, result_id=result_id)
+
+    elif action == "rs:top5":
+        await rs_edit_top5(update, user_id, result_id=result_id)
+        await mark_result_action_completed(result_id, action)
+        await expire_result_callbacks(result_id)
+        await _rebuild_and_edit_keyboard(query, user_id, result_id, tool_id)
+
+    elif action == "rs:style":
+        await rs_edit_style(update, user_id, result_id=result_id)
+
+    elif action == "rs:regen":
+        await reset_result_completed(result_id)
+        await rs_regen(update, user_id, result_id=result_id)
+
+    elif action == "rs:pick_desc":
+        await rs_pick_for_desc(update, user_id, result_id=result_id)
+        await mark_result_action_completed(result_id, action)
+        await _rebuild_and_edit_keyboard(query, user_id, result_id, tool_id)
+
+    # ── Carousel ──────────────────────────────────────────────────────────────
+    elif action == "car:headline":
+        await carousel.car_edit_headline(update, user_id, result_id=result_id)
+
+    elif action == "car:softer":
+        await carousel.car_edit_softer(update, user_id, result_id=result_id)
+
+    elif action == "car:bolder":
+        await carousel.car_edit_bolder(update, user_id, result_id=result_id)
+
+    elif action == "car:shorten":
+        await carousel.car_edit_shorten(update, user_id, result_id=result_id)
+        await mark_result_action_completed(result_id, action)
+        await _rebuild_and_edit_keyboard(query, user_id, result_id, tool_id)
+
+    elif action == "car:add_slide":
+        await carousel.car_edit_add_slide(update, user_id, result_id=result_id)
+        await mark_result_action_completed(result_id, action)
+        await _rebuild_and_edit_keyboard(query, user_id, result_id, tool_id)
+
+    elif action == "car:trigger":
+        await carousel.car_edit_trigger(update, user_id, result_id=result_id)
+
+    elif action == "car:format":
+        await carousel.car_edit_format(update, user_id, result_id=result_id)
+
+    # ── Generic agents ────────────────────────────────────────────────────────
+    elif action.startswith("ag:"):
+        _ag_key_map = {
+            "ag:softer":      "softer",
+            "ag:bolder":      "bolder",
+            "ag:shorter":     "shorter",
+            "ag:detail":      "add_detail",
+            "ag:cta":         "stronger_cta",
+            "ag:resonance":   "resonance",
+            "ag:add_proof":   "add_proof",
+            "ag:mid_hook":    "mid_hook",
+            "ag:hook":        "hook",
+            "ag:deepen":      "deepen",
+            "ag:tactics":     "tactics",
+            "ag:positioning": "positioning",
+            "ag:save_moment": "save_moment",
+        }
+        edit_key = _ag_key_map.get(action)
+        if edit_key:
+            await ag.apply_agent_edit(update, user_id, edit_key, result_id=result_id)
+
+    # ── Universal ─────────────────────────────────────────────────────────────
+    elif action == "regen":
+        await regen_by_id(update, user_id, result_id)
+
+    elif action == "refine":
+        await clear_agent_session(user_id, "refine_flow")
+        await refine_start(update, user_id, result_id=result_id)
+
+    else:
+        logger.warning(f"[scoped] unhandled action={action!r} user={user_id}")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -137,8 +252,48 @@ async def _car_stale_guard(user_id: int, query) -> bool:
 async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     """
     Главный роутер callback-кнопок.
-    Stale callback protection: если действие уже неактуально — вежливый ответ.
+    PHASE 4+5: Сначала пробуем scoped resolver. Если не распознан — legacy-ветки.
     """
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SCOPED CALLBACK SYSTEM — новые кнопки идут сюда
+    # ══════════════════════════════════════════════════════════════════════════
+    resolved = await resolve_callback(data, user_id)
+    if resolved is not None:
+        validation = await validate_callback(resolved, user_id)
+        if not validation.is_valid:
+            _error_msgs = {
+                "stale_keyboard":           "⚠️ Эта кнопка устарела. Используй кнопки под последним результатом.",
+                "already_completed":        "✅ Это действие уже выполнено.",
+                "wrong_user":               None,   # silent
+                "result_wrong_user":        None,   # silent
+                "result_not_found":         "Материал не найден — создай новый.",
+                "token_expired":            "⚠️ Эта кнопка устарела. Используй кнопки под последним результатом.",
+                "token_used":               "✅ Это действие уже было выполнено.",
+                "tool_mismatch":            "Действие не применимо к этому инструменту.",
+                "action_not_allowed_for_tool": "Это действие недоступно для данного инструмента.",
+            }
+            msg = _error_msgs.get(validation.error_code, validation.user_message)
+            if msg:
+                await query.answer(msg, show_alert=True)
+            return
+
+        # Маркируем DB-токен использованным для однократных действий
+        if resolved.token:
+            from callback_context import ACTION_REGISTRY
+            spec = ACTION_REGISTRY.get(resolved.action, {})
+            if spec.get("marks_completed") and not spec.get("repeatable", True):
+                await mark_callback_used(resolved.token)
+
+        await _route_scoped_action(update, ctx, query, user_id, resolved, validation.result)
+        return
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # LEGACY CALLBACKS — временно, до завершения миграции
+    # Логируем для мониторинга: когда legacy исчезнут — удалить весь блок ниже
+    # ══════════════════════════════════════════════════════════════════════════
+    logger.debug(f"[legacy_callback] user={user_id} data={data!r}")
+
     # ── Подписка / Кабинет ────────────────────────────────────────────────────
 
     if data in ("sub_cabinet", "sub_menu"):
@@ -979,11 +1134,15 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                     pass
 
             # Всё в одном сообщении с combined_kb
+            # PHASE 9 FIX: scoped кнопки привязаны к конкретному _result_id
+            _regen_cb_btn  = f"regen:{_result_id}:1" if _result_id else "regen_last"
+            _refine_cb_btn = f"refine:{_result_id}:1" if _result_id else "refine_last"
+
             if _result_id and _hint is not None:
                 from voice_learner import voice_feedback_kb as _vfkb
                 _combined_kb = _vfkb(_result_id, extra_rows=[
                     [f"⚡ Детальнее|{deep_cb}", f"💾 Сохранить|oneshot_save_{agent_key}"],
-                    ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
+                    [f"✏️ Доработать|{_refine_cb_btn}", f"🔄 Другой вариант|{_regen_cb_btn}"],
                     ["← Меню|menu_main"],
                 ])
                 await send(update, f"{result}\n\n_Звучит как твой голос?{_hint}_",
@@ -992,7 +1151,7 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                 await send(update, result, parse_mode="Markdown",
                            reply_markup=kb(
                                [f"⚡ Детальнее|{deep_cb}", f"💾 Сохранить|oneshot_save_{agent_key}"],
-                               ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
+                               [f"✏️ Доработать|{_refine_cb_btn}", f"🔄 Другой вариант|{_regen_cb_btn}"],
                                ["← Меню|menu_main"],
                            ))
 

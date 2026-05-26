@@ -328,19 +328,42 @@ async def clear_all_agent_sessions(user_id: int) -> None:
 # Results library — Postgres
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def save_result(user_id: int, agent_key: str,
-                      agent_name: str, content: str) -> int:
-    """Сохраняет результат, возвращает ID для followup."""
+import json as _json_mod
+
+
+async def save_result(
+    user_id: int,
+    agent_key: str,
+    agent_name: str,
+    content: str,
+    *,
+    source_input: str | None = None,
+    parent_result_id: int | None = None,
+    allowed_actions: list | None = None,
+    metadata: dict | None = None,
+) -> int:
+    """Сохраняет результат, возвращает ID.
+
+    Новые kwargs backward-compatible — все None по умолчанию.
+    Примечание: update_streak_on_result вызывается из agents._send_result()
+    чтобы избежать circular import db → ui.home → db.
+    """
     pool = _get_pool()
     async with pool.acquire() as conn:
         result_id = await conn.fetchval(
-            """INSERT INTO results (user_id, agent_key, agent_name, content)
-               VALUES ($1, $2, $3, $4) RETURNING id""",
+            """INSERT INTO results
+               (user_id, agent_key, agent_name, content,
+                source_input, parent_result_id,
+                allowed_actions, keyboard_version, completed_actions,
+                metadata_json)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,1,'[]'::jsonb,$8)
+               RETURNING id""",
             user_id, agent_key, agent_name, content,
+            source_input, parent_result_id,
+            _json_mod.dumps(allowed_actions, ensure_ascii=False) if allowed_actions is not None else None,
+            _json_mod.dumps(metadata, ensure_ascii=False) if metadata else None,
         )
     return result_id or 0
-    # Примечание: update_streak_on_result вызывается из agents._send_result()
-    # чтобы избежать circular import db → ui.home → db
 
 
 async def get_results(user_id: int, limit: int = 50) -> list[dict]:
@@ -358,11 +381,80 @@ async def get_result_by_id(user_id: int, result_id: int) -> dict | None:
     pool = _get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, agent_key, agent_name, content, ts::text FROM results "
-            "WHERE user_id=$1 AND id=$2",
+            """SELECT id, user_id, agent_key, agent_name, content, ts::text,
+                      keyboard_version, completed_actions, allowed_actions,
+                      source_input, parent_result_id, metadata_json
+               FROM results
+               WHERE user_id=$1 AND id=$2""",
             user_id, result_id,
         )
-    return dict(row) if row else None
+    if not row:
+        return None
+    r = dict(row)
+    # Десериализуем JSONB поля
+    for field in ("completed_actions", "allowed_actions", "metadata_json"):
+        if isinstance(r.get(field), str):
+            try:
+                r[field] = _json_mod.loads(r[field])
+            except Exception:
+                pass
+    return r
+
+
+async def get_result_kb_state(result_id: int) -> dict | None:
+    """Возвращает только поля нужные для валидации и перестройки клавиатуры.
+    Не требует user_id — используется в validate_callback."""
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, user_id, agent_key, keyboard_version,
+                      completed_actions, allowed_actions
+               FROM results WHERE id=$1""",
+            result_id,
+        )
+    if not row:
+        return None
+    r = dict(row)
+    for field in ("completed_actions", "allowed_actions"):
+        if isinstance(r.get(field), str):
+            try:
+                r[field] = _json_mod.loads(r[field])
+            except Exception:
+                pass
+    if r.get("completed_actions") is None:
+        r["completed_actions"] = []
+    return r
+
+
+async def mark_result_action_completed(result_id: int, action: str) -> int:
+    """Добавляет action в completed_actions и инкрементирует keyboard_version.
+    Возвращает новый keyboard_version."""
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """UPDATE results
+               SET completed_actions = completed_actions || $2::jsonb,
+                   keyboard_version  = keyboard_version + 1,
+                   updated_at        = NOW()
+               WHERE id = $1
+               RETURNING keyboard_version""",
+            result_id, _json_mod.dumps([action]),
+        )
+    return row["keyboard_version"] if row else 1
+
+
+async def reset_result_completed(result_id: int) -> None:
+    """Сбрасывает completed_actions и инкрементирует keyboard_version (при regen)."""
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE results
+               SET completed_actions = '[]'::jsonb,
+                   keyboard_version  = keyboard_version + 1,
+                   updated_at        = NOW()
+               WHERE id = $1""",
+            result_id,
+        )
 
 
 async def delete_result(user_id: int, result_id: int) -> None:

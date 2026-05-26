@@ -20,11 +20,11 @@ import asyncio
 import logging
 import re
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton
 
 from db import (
     get_agent_session, save_agent_session, clear_agent_session,
-    get_profile, save_result, kv_set, kv_get,
+    get_profile, save_result, get_result_by_id, kv_set, kv_get,
 )
 from llm import complete
 from security import protect
@@ -32,6 +32,7 @@ from prompt_editor import get_prompt
 from utils import send, kb, safe_delete, typing_loop
 from voice_learner import build_voice_context, voice_feedback_kb
 from config import build_reels_short_headline_system, build_reels_short_desc_system
+from ui.keyboards import build_result_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -270,8 +271,12 @@ async def rs_gen(update: Update, user_id: int, topic: str) -> None:
 
     result_id = 0
     try:
-        result_id = await save_result(user_id, "reels_short", "Хуки для рилса",
-                                      f"Тема: {topic}\n\n{headlines}") or 0
+        result_id = await save_result(
+            user_id, "reels_short", "Хуки для рилса",
+            f"Тема: {topic}\n\n{headlines}",
+            source_input=topic,
+            allowed_actions=["rs:top5", "rs:softer", "rs:bolder", "rs:style", "rs:pick_desc"],
+        ) or 0
     except Exception as e:
         logger.warning(f"save_result rs failed: {e}")
 
@@ -298,39 +303,59 @@ async def rs_gen(update: Update, user_id: int, topic: str) -> None:
 
 
 async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict, result_id: int = 0) -> None:
-    """Отправляет хуки + панель доработки."""
+    """Отправляет хуки + панель доработки через scoped keyboard builder."""
     await send(
         update,
         f"🎬 *Хуки — тема:* _{topic}_\n\n{headlines}",
         parse_mode="Markdown",
     )
-    # Единое сообщение: панель правок + voice feedback
+
+    # Строим клавиатуру через centralized builder
     try:
-        from db import get_results as _gr, get_stats as _gs
-        from voice_learner import get_voice_stats, should_show_voice_feedback, voice_feedback_kb as _vfkb
+        from db import get_result_kb_state
+        from ui.keyboards import build_result_keyboard_with_voice
+        from voice_learner import get_voice_stats, should_show_voice_feedback
         from ui.progress_bar import voice_progress_short as _vps
-        _recent = await _gr(user_id, limit=1)
-        if _recent:
-            _rid       = _recent[0]["id"]
-            _vs        = await get_voice_stats(user_id)
-            _total     = _vs.get("total_signals", 0)
-            _gen_count = (await _gs(user_id)).get("total", 1)
+        from db import get_stats as _gs
+
+        if result_id:
+            result_row = await get_result_kb_state(result_id)
+        else:
+            # Fallback: берём последний сохранённый
+            from db import get_results as _gr
+            _recent = await _gr(user_id, limit=1)
+            result_row = await get_result_kb_state(_recent[0]["id"]) if _recent else None
+
+        if result_row:
+            _vs         = await get_voice_stats(user_id)
+            _total      = _vs.get("total_signals", 0)
+            _gen_count  = (await _gs(user_id)).get("total", 1)
+
             if should_show_voice_feedback(_total, _gen_count):
                 _hint = _vps(_total)
-                combined_kb = _vfkb(_rid, extra_rows=[
-                    ["🎨 Мягче|rs_edit_softer",   "🔥 Жёстче|rs_edit_bolder"],
-                    ["🏆 Топ-5|rs_edit_top5",     "🎨 Стиль|rs_edit_style"],
-                    ["✅ Выбрать хук — описание|rs_pick_for_desc"],
-                    ["🔄 Другая тема|rs_regen",   "← Меню|menu_main"],
-                ])
-                await send(update, f"Звучит как твой голос?{_hint}",
-                           parse_mode="Markdown", reply_markup=combined_kb)
+                prompt_text, combined_kb = await build_result_keyboard_with_voice(
+                    user_id, result_row, "reels_short",
+                    voice_hint=_hint,
+                    extra_rows=[
+                        [InlineKeyboardButton("🔁 Новая тема", callback_data="flow_reels_short")],
+                    ],
+                )
+                await send(update, prompt_text, parse_mode="Markdown", reply_markup=combined_kb)
             else:
-                await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+                edit_kb = await build_result_keyboard(
+                    user_id, result_row, "reels_short",
+                    extra_rows=[
+                        [InlineKeyboardButton("🔁 Новая тема", callback_data="flow_reels_short")],
+                    ],
+                )
+                await send(update, "Докрути под себя 👇", reply_markup=edit_kb)
         else:
-            await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
-    except Exception:
-        await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
+            await send(update, "Докрути под себя 👇",
+                       reply_markup=kb(["🔁 Новая тема|flow_reels_short", "← Меню|menu_main"]))
+    except Exception as e:
+        logger.warning(f"[reels] _send_result keyboard build failed: {e}")
+        await send(update, "Докрути под себя 👇",
+                   reply_markup=kb(["🔁 Новая тема|flow_reels_short", "← Меню|menu_main"]))
 
     try:
         from flows.proactive import schedule_proactive_hint
@@ -341,23 +366,47 @@ async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict
 
 # ── Панель доработки ──────────────────────────────────────────────────────────
 
-async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
+async def _apply_edit(update: Update, user_id: int, edit_key: str, result_id: int = 0) -> None:
     """
     Универсальный обработчик правок из панели.
-    Берёт last_result из сессии, применяет инструкцию, возвращает новые хуки.
+    PHASE 6: Если передан result_id — грузим из БД (scoped path).
+    Fallback — legacy path через Redis-сессию.
     """
-    s = await get_agent_session(user_id, _RS_KEY)
-    if not s or not s.get("last_result"):
-        await send(
-            update,
-            "Сессия устарела — начни заново.",
-            reply_markup=kb(["🎬 Новые хуки|flow_reels_short", "← Меню|menu_main"]),
-        )
-        return
+    topic = ""
+    source_text = ""
+
+    if result_id:
+        # Scoped path: берём контент из БД
+        r = await get_result_by_id(user_id, result_id)
+        if not r:
+            await send(update, "Материал не найден.",
+                       reply_markup=kb(["← Меню|menu_main"]))
+            return
+        source_text = r.get("source_input") or r["content"]
+        # Извлекаем тему из content если есть (формат "Тема: ...\n\n...")
+        if r["content"].startswith("Тема:"):
+            lines = r["content"].split("\n", 1)
+            topic = lines[0].replace("Тема:", "").strip()
+        else:
+            topic = r.get("source_input", "")
+        current = r["content"]
+        parent_result_id = result_id
+    else:
+        # Legacy path: из Redis-сессии
+        s = await get_agent_session(user_id, _RS_KEY)
+        if not s or not s.get("last_result"):
+            await send(
+                update,
+                "Сессия устарела — начни заново.",
+                reply_markup=kb(["🎬 Новые хуки|flow_reels_short", "← Меню|menu_main"]),
+            )
+            return
+        current = s["last_result"]
+        topic   = s.get("topic", "")
+        source_text = s.get("topic", "")
+        parent_result_id = None
 
     instruction = _REFINE_PROMPTS.get(edit_key, "Улучши хуки.")
-    current     = s["last_result"]
-    topic       = s.get("topic", "")
     profile     = await get_profile(user_id)
 
     system = (
@@ -377,7 +426,8 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
         logger.error(f"[reels] edit {edit_key} failed: {e}")
         _tt.cancel()
         await safe_delete(status)
-        await send(update, "Не получилось — попробуй ещё раз 🔁", reply_markup=_edit_panel_kb())
+        await send(update, "Не получилось — попробуй ещё раз 🔁",
+                   reply_markup=kb(["🔁 Попробовать снова|flow_reels_short", "← Меню|menu_main"]))
         return
     finally:
         _tt.cancel()
@@ -385,20 +435,34 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
     await safe_delete(status)
 
     if not new_result or not new_result.strip():
-        await send(update, "Пустой ответ — попробуй ещё раз.", reply_markup=_edit_panel_kb())
+        await send(update, "Пустой ответ — попробуй ещё раз.",
+                   reply_markup=kb(["← Меню|menu_main"]))
         return
 
-    # Сохраняем новую версию + трекаем завершённые действия
-    _rs_completed = set(s.get("completed_actions", []))
-    _rs_completed.add(edit_key)
-    s["last_result"] = new_result
-    s["completed_actions"] = list(_rs_completed)
-    await save_agent_session(user_id, _RS_KEY, s)
-    await _save_rs_snapshot(user_id, s)  # persist across session clears
-
+    # Сохраняем новый результат с parent_result_id и allowed_actions
+    new_result_id = 0
     try:
-        await save_result(user_id, "reels_short", "Хуки для рилса (правка)",
-                          f"Тема: {topic}\n\n{new_result}")
+        new_result_id = await save_result(
+            user_id, "reels_short", "Хуки для рилса (правка)",
+            f"Тема: {topic}\n\n{new_result}",
+            source_input=source_text,
+            parent_result_id=parent_result_id,
+            allowed_actions=["rs:top5", "rs:softer", "rs:bolder", "rs:style", "rs:pick_desc"],
+        ) or 0
+    except Exception as e:
+        logger.warning(f"[reels] save_result edit failed: {e}")
+
+    # Legacy: обновляем Redis-сессию тоже (для backward compat с rs_regen)
+    try:
+        s = await get_agent_session(user_id, _RS_KEY) or {}
+        _rs_completed = set(s.get("completed_actions", []))
+        _rs_completed.add(edit_key)
+        s["last_result"] = new_result
+        s["completed_actions"] = list(_rs_completed)
+        if topic:
+            s["topic"] = topic
+        await save_agent_session(user_id, _RS_KEY, s)
+        await _save_rs_snapshot(user_id, s)
     except Exception:
         pass
 
@@ -407,22 +471,43 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
         f"🎬 *Хуки — тема:* _{topic}_\n\n{new_result}",
         parse_mode="Markdown",
     )
-    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb(completed=_rs_completed))
+
+    # Строим клавиатуру для нового результата через builder
+    if new_result_id:
+        try:
+            from db import get_result_kb_state
+            new_row = await get_result_kb_state(new_result_id)
+            if new_row:
+                edit_kb = await build_result_keyboard(
+                    user_id, new_row, "reels_short",
+                    extra_rows=[
+                        [InlineKeyboardButton("🔁 Новая тема", callback_data="flow_reels_short")],
+                    ],
+                )
+                await send(update, "Ещё докрутить?", reply_markup=edit_kb)
+                return
+        except Exception as e:
+            logger.warning(f"[reels] edit keyboard build failed: {e}")
+
+    # Fallback
+    s_now = await get_agent_session(user_id, _RS_KEY) or {}
+    _done = set(s_now.get("completed_actions", []))
+    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb(completed=_done))
 
 
-async def rs_edit_softer(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "softer")
+async def rs_edit_softer(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "softer", result_id=result_id)
 
 
-async def rs_edit_bolder(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "bolder")
+async def rs_edit_bolder(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "bolder", result_id=result_id)
 
 
-async def rs_edit_top5(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "top5")
+async def rs_edit_top5(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "top5", result_id=result_id)
 
 
-async def rs_edit_style(update: Update, user_id: int) -> None:
+async def rs_edit_style(update: Update, user_id: int, result_id: int = 0) -> None:
     """Показываем выбор стиля."""
     await send(update, "Выбери стиль хуков 👇", reply_markup=_style_choice_kb())
 
@@ -444,12 +529,24 @@ async def rs_edit_back(update: Update, user_id: int) -> None:
 
 # ── Написание описания к выбранному хуку ─────────────────────────────────────
 
-async def rs_pick_for_desc(update: Update, user_id: int) -> None:
+async def rs_pick_for_desc(update: Update, user_id: int, result_id: int = 0) -> None:
     """Пользователь хочет написать описание к конкретному хуку."""
     s = await get_agent_session(user_id, _RS_KEY)
     if not s or not s.get("last_result"):
-        await rs_start(update, user_id)
-        return
+        # Если есть result_id — попробуем загрузить из БД
+        if result_id:
+            r = await get_result_by_id(user_id, result_id)
+            if r:
+                s = {"step": "done", "last_result": r["content"], "topic": ""}
+                if r["content"].startswith("Тема:"):
+                    s["topic"] = r["content"].split("\n", 1)[0].replace("Тема:", "").strip()
+                await save_agent_session(user_id, _RS_KEY, s)
+            else:
+                await rs_start(update, user_id)
+                return
+        else:
+            await rs_start(update, user_id)
+            return
     s["step"] = "pick_for_desc"
     await save_agent_session(user_id, _RS_KEY, s)
     await send(
@@ -571,11 +668,13 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
     if not result or not result.strip():
         result = "⚠️ Пустой ответ. Попробуй снова."
 
+    _desc_result_id = 0
     try:
-        await save_result(
+        _desc_result_id = await save_result(
             user_id, "reels_short", "Рилс — описание",
             f"Хук: {s.get('chosen', '')}\n\n{result}",
-        )
+            source_input=s.get("chosen", ""),
+        ) or 0
     except Exception as e:
         logger.warning(f"save_result rs_desc failed: {e}")
 
@@ -583,29 +682,37 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
     s["step"] = "done"
     await save_agent_session(user_id, _RS_KEY, s)
 
+    # Scoped кнопки regen/refine
+    if _desc_result_id:
+        _regen_cb  = f"regen:{_desc_result_id}:1"
+        _refine_cb = f"refine:{_desc_result_id}:1"
+    else:
+        _regen_cb  = "regen_last"
+        _refine_cb = "refine_last"
+
     await send(
         update,
         f"🎬 *Готово!*\n\n*Хук:*\n_{s.get('chosen', '')}_\n\n*Описание:*\n{result}",
         parse_mode="Markdown",
         reply_markup=kb(
-            ["✏️ Доработать|refine_last",          "🔄 Другой вариант|regen_last"],
+            [f"✏️ Доработать|{_refine_cb}", f"🔄 Другой вариант|{_regen_cb}"],
             ["📝 Другой хук — описание|rs_pick_for_desc"],
-            ["🔁 Новая тема|flow_reels_short",      "← Меню|menu_main"],
+            ["🔁 Новая тема|flow_reels_short", "← Меню|menu_main"],
         ),
     )
 
     try:
-        from db import get_results as _gr, get_stats as _gs
+        from db import get_stats as _gs
         from voice_learner import get_voice_stats, should_show_voice_feedback, voice_feedback_kb as _vfkb2
         from ui.progress_bar import voice_progress_short as _vps2
-        _recent2 = await _gr(user_id, limit=1)
-        if _recent2:
-            _vs2       = await get_voice_stats(user_id)
-            _total2    = _vs2.get("total_signals", 0)
-            _gc2       = (await _gs(user_id)).get("total", 1)
+        _rid2 = _desc_result_id
+        if _rid2:
+            _vs2    = await get_voice_stats(user_id)
+            _total2 = _vs2.get("total_signals", 0)
+            _gc2    = (await _gs(user_id)).get("total", 1)
             if should_show_voice_feedback(_total2, _gc2):
                 await send(update, f"Звучит как твой голос?{_vps2(_total2)}",
-                           parse_mode="Markdown", reply_markup=_vfkb2(_recent2[0]["id"]))
+                           parse_mode="Markdown", reply_markup=_vfkb2(_rid2))
     except Exception:
         pass
 
@@ -670,8 +777,22 @@ async def route_text(update: Update, user_id: int, text: str, s: dict) -> None:
 
 # ── Обратная совместимость (старые callback_data из сохранённых сессий) ───────
 
-async def rs_regen(update: Update, user_id: int) -> None:
-    """Перегенерировать хуки с той же темой."""
+async def rs_regen(update: Update, user_id: int, result_id: int = 0) -> None:
+    """Перегенерировать хуки с той же темой.
+
+    PHASE 9: Если передан result_id — грузим source_input из БД.
+    Fallback — legacy path через Redis-сессию.
+    """
+    if result_id:
+        r = await get_result_by_id(user_id, result_id)
+        if r:
+            topic = r.get("source_input") or ""
+            if not topic and r["content"].startswith("Тема:"):
+                topic = r["content"].split("\n", 1)[0].replace("Тема:", "").strip()
+            if topic:
+                await rs_gen(update, user_id, topic)
+                return
+    # Legacy path
     s = await get_agent_session(user_id, _RS_KEY)
     if s and s.get("topic"):
         await rs_gen(update, user_id, s["topic"])

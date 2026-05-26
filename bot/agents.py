@@ -17,7 +17,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Callable
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton
 
 import llm
 from llm import vision_chat, complete_long, generate_from_history
@@ -1414,25 +1414,36 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     # Единственное сообщение после результата — панель правок + voice feedback
     # Структура: voice question наверху (важнее), затем правки
     if _result_id:
-        from utils import kb as _kb
-        from voice_learner import voice_feedback_kb as _vfkb
+        try:
+            from db import get_result_kb_state
+            from ui.keyboards import build_result_keyboard_with_voice, build_result_keyboard
+            from voice_learner import should_show_voice_feedback
 
-        # Tool-specific edit panel (returns kb + drift_warning)
-        _panel_kb, _drift = _agent_edit_panel_kb(spec.key)
-        # Combine with voice feedback
-        combined_kb = _vfkb(_result_id, extra_rows=[
-            r for r in _panel_kb.inline_keyboard
-        ])
-        await send(
-            update,
-            f"Звучит как твой голос?{_voice_hint}",
-            parse_mode="Markdown",
-            reply_markup=combined_kb,
-        )
-    else:
-        # Нет result_id — только панель правок
-        _panel_kb, _drift = _agent_edit_panel_kb(spec.key)
-        await send(update, "Докрути под себя 👇", reply_markup=_panel_kb)
+            _result_row = await get_result_kb_state(_result_id)
+            if _result_row:
+                _drift_rows = []
+                if _voice_hint:  # голосовой прогресс уже вычислен выше
+                    pass
+
+                if should_show_voice_feedback(
+                    (await __import__("voice_learner").get_voice_stats(user_id)).get("total_signals", 0),
+                    (await __import__("db").get_stats(user_id)).get("total", 1),
+                ):
+                    prompt_text, combined_kb = await build_result_keyboard_with_voice(
+                        user_id, _result_row, spec.key,
+                        voice_hint=_voice_hint,
+                    )
+                    await send(update, prompt_text, parse_mode="Markdown", reply_markup=combined_kb)
+                else:
+                    _panel_kb = await build_result_keyboard(user_id, _result_row, spec.key)
+                    await send(update, "Докрути под себя 👇", reply_markup=_panel_kb)
+                return
+        except Exception as e:
+            logger.warning(f"[agents] _after_result scoped keyboard failed: {e}")
+
+    # Fallback: нет result_id или ошибка — только legacy панель правок
+    _panel_kb, _drift = _agent_edit_panel_kb(spec.key)
+    await send(update, "Докрути под себя 👇", reply_markup=_panel_kb)
 
     # Сохраняем отложенную proactive-подсказку — покажется при следующем меню
     try:
@@ -1492,51 +1503,71 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
         pass
 
 
-async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
+async def apply_agent_edit(update: Update, user_id: int, edit_key: str, result_id: int = 0) -> None:
     """
     Универсальный обработчик правок из панели агента.
-    Аналог _apply_edit() в carousel.py.
+    PHASE 6: Если передан result_id — грузим контент из БД (scoped path).
+    Fallback — legacy path через __active_agent__ + get_results(limit=1).
     Вызывается из callbacks.py по ag_edit_* callback_data.
     """
-    # BUG #3 FIX: read the persisted edit session first (it carries completed_actions).
-    # Only fall back to get_results() for the content itself.
-    from db import get_results, kv_get as _kvg
+    from db import get_results, get_result_by_id as _grbi, kv_get as _kvg
 
-    _spec_key = None
+    _spec_key    = None
     _edit_session = None
+    _s           = None
 
-    # Step 1: find active agent key
-    try:
-        _active = await _kvg(user_id, "__active_agent__")
-        if _active and _active not in (_RS_KEY, _CAR_KEY):
-            _spec_key = _active
-    except Exception:
-        pass
-
-    # Step 2: read persisted edit session (has completed_actions + last_result)
-    if _spec_key:
+    if result_id:
+        # SCOPED PATH: грузим из БД — никакого __active_agent__
+        r = await _grbi(user_id, result_id)
+        if not r:
+            await send(update, "Материал не найден — создай что-нибудь сначала.",
+                       reply_markup=kb(["← Меню|menu_main"]))
+            return
+        _spec_key = r["agent_key"]
+        _s = {
+            "last_result":       r["content"],
+            "spec_key":          _spec_key,
+            "completed_actions": list(r.get("completed_actions") or []),
+            "refinement_count":  (r.get("metadata_json") or {}).get("refinement_count", 0),
+            "original_result":   r.get("source_input") or r["content"],
+        }
+        # Также грузим persisted edit session для refinement_count
         try:
             _edit_session = await get_agent_session(user_id, f"__ag_edit_{_spec_key}__")
+            if _edit_session and _edit_session.get("result_id") == result_id:
+                _s["refinement_count"] = _edit_session.get("refinement_count", 0)
+        except Exception:
+            pass
+    else:
+        # LEGACY PATH: через __active_agent__ (временная совместимость)
+        # BUG #3 FIX: read the persisted edit session first (it carries completed_actions).
+        try:
+            _active = await _kvg(user_id, "__active_agent__")
+            if _active and _active not in (_RS_KEY, _CAR_KEY):
+                _spec_key = _active
         except Exception:
             pass
 
-    # Step 3: if no edit session with content, fall back to DB result
-    _s = None
-    if _edit_session and _edit_session.get("last_result"):
-        _s = _edit_session
-    else:
-        try:
-            _recent = await get_results(user_id, limit=1)
-            if _recent:
-                _spec_key = _spec_key or _recent[0]["agent_key"]
-                # Merge: DB content + any completed_actions already persisted in edit session
-                _s = {
-                    "last_result":       _recent[0]["content"],
-                    "spec_key":          _spec_key,
-                    "completed_actions": (_edit_session or {}).get("completed_actions", []),
-                }
-        except Exception:
-            pass
+        if _spec_key:
+            try:
+                _edit_session = await get_agent_session(user_id, f"__ag_edit_{_spec_key}__")
+            except Exception:
+                pass
+
+        if _edit_session and _edit_session.get("last_result"):
+            _s = _edit_session
+        else:
+            try:
+                _recent = await get_results(user_id, limit=1)
+                if _recent:
+                    _spec_key = _spec_key or _recent[0]["agent_key"]
+                    _s = {
+                        "last_result":       _recent[0]["content"],
+                        "spec_key":          _spec_key,
+                        "completed_actions": (_edit_session or {}).get("completed_actions", []),
+                    }
+            except Exception:
+                pass
 
     if not _s or not _s.get("last_result"):
         await send(update, "Нет материала для правки — создай что-нибудь сначала.",
@@ -1570,10 +1601,9 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
     # Build strategic context for refine
     from db import get_cip
     cip = await get_cip(user_id)
-    funnel_stage = cip.get("current_funnel_phase", "awareness")
+    funnel_stage   = cip.get("current_funnel_phase", "awareness")
     audience_trust = cip.get("audience_trust_level", 5)
 
-    # Funnel-aware instruction override for context-sensitive edits
     if edit_key == "bolder" and _spec_key not in ("warmup",):
         if funnel_stage == "awareness" and audience_trust < 5:
             instruction = (
@@ -1590,7 +1620,6 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
                 "ЗАЩИЩЕНО: не создавай искусственного дефицита — аудитория на этой стадии чувствует манипуляцию."
             )
 
-    # softer_confirmed: user acknowledged the conversion-stage warning, proceed without another warning
     if edit_key == "softer_confirmed":
         instruction = (
             "Смягчи текст: убери давление и срочность, сделай тон мягче и человечнее. "
@@ -1598,7 +1627,6 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
         )
 
     if edit_key == "softer" and funnel_stage == "conversion":
-        # Warn before softening a conversion text
         await send(update,
             "⚠️ *Смягчаю текст этапа конверсии — это может снизить эффективность CTA.*\n\n"
             "Уверена что хочешь продолжить?",
@@ -1638,29 +1666,28 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
 
     if not new_result or not new_result.strip():
         _panel_kb, _ = _agent_edit_panel_kb(_spec_key)
-        await send(update, "Пустой ответ — попробуй ещё раз.",
-                   reply_markup=_panel_kb)
+        await send(update, "Пустой ответ — попробуй ещё раз.", reply_markup=_panel_kb)
         return
 
-    # Трекинг завершённых действий — эта кнопка исчезнет из следующей клавиатуры
+    # Трекинг завершённых действий
     _completed = set(_s.get("completed_actions", []))
     _completed.add(edit_key)
     _refinement_count = _s.get("refinement_count", 0) + 1
 
-    # Обновляем сохранённый last_result
+    # Обновляем сохранённый last_result в edit-сессии (legacy compat)
     _s["last_result"] = new_result
     _s["refinement_count"] = _refinement_count
+    _s["completed_actions"] = list(_completed)
     try:
         await save_agent_session(user_id, f"__ag_edit_{_spec_key}__", _s)
     except Exception:
         pass
 
-    # Side-effect: save positioning_statement to CIP after competitor edit
+    # Side-effect: save positioning_statement to CIP
     if edit_key == "positioning" and _spec_key == "competitor":
         try:
             from db import get_cip, save_cip as _sc
             _cip = await get_cip(user_id)
-            # Extract the positioning sentence from the result
             for _line in new_result.split("\n"):
                 if "В отличие от" in _line or "отличие" in _line.lower():
                     _cip["positioning_statement"] = _line.strip()[:300]
@@ -1669,13 +1696,19 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
         except Exception:
             pass
 
+    # Сохраняем новый результат в БД
+    _new_result_id = 0
     try:
         _name = spec.name if spec else _spec_key
-        await save_result(user_id, _spec_key, f"{_name} (правка)", new_result)
+        _new_result_id = await save_result(
+            user_id, _spec_key, f"{_name} (правка)", new_result,
+            source_input=_s.get("original_result") or current,
+            parent_result_id=result_id or None,
+        ) or 0
     except Exception:
         pass
 
-    # Отправляем
+    # Отправляем контент
     full  = f"✅ *Готово!*\n\n{new_result}"
     CHUNK = 3800
     if len(full) <= CHUNK:
@@ -1688,5 +1721,35 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
+    # Клавиатура: scoped если есть новый result_id, иначе legacy
+    if _new_result_id:
+        try:
+            from db import get_result_kb_state
+            from ui.keyboards import build_result_keyboard
+            _new_row = await get_result_kb_state(_new_result_id)
+            if _new_row:
+                _drift_rows = []
+                if _refinement_count >= 3:
+                    _drift_rows = [[
+                        InlineKeyboardButton(
+                            "🔙 Вернуться к первому результату",
+                            callback_data="ag_restore_original"
+                        )
+                    ]]
+                _panel_kb = await build_result_keyboard(
+                    user_id, _new_row, _spec_key,
+                    drift_warning_rows=_drift_rows,
+                )
+                _drift_text = (
+                    f"\n\n⚠️ _Применено правок: {_refinement_count}. "
+                    "Контент может отдалиться от исходного замысла._"
+                ) if _refinement_count >= 3 else ""
+                await send(update, f"Ещё докрутить?{_drift_text}",
+                           parse_mode="Markdown", reply_markup=_panel_kb)
+                return
+        except Exception as e:
+            logger.warning(f"[agents] scoped keyboard build failed: {e}")
+
+    # Fallback на legacy keyboard
     _panel_kb, _drift = _agent_edit_panel_kb(_spec_key, _completed, _refinement_count)
     await send(update, f"Ещё докрутить?{_drift}", parse_mode="Markdown", reply_markup=_panel_kb)

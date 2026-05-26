@@ -433,16 +433,10 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"[photo dedup] user={user_id} — запрос уже в обработке")
         return
     async with lock:
-        # ── Режим сбора постов для обучения голосу ────────────────────────
-        raw_session = await kv_get(user_id, _POST_COLLECTION_KEY)
-        if raw_session:
-            session = json.loads(raw_session)
-            await handle_post_collection(update, user_id, session)
-            return
-
         caption = (update.message.caption or "").strip()
 
-        # Активный generic агент
+        # ── 1. Активный generic агент (сторис, прогрев и др.) — ПЕРВЫЙ ПРИОРИТЕТ ──
+        # Активные агенты всегда важнее фонового сбора постов
         agent_key = await _detect_active_agent(user_id)
         spec = ag.get_spec(agent_key) if agent_key else None
         if spec:
@@ -451,19 +445,52 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 await ag.handle_photo(update, user_id, spec)
                 return
 
-        # Карусель во время интервью
+        # ── 2. Карусель во время интервью ─────────────────────────────────
         car = await get_agent_session(user_id, _CAR_KEY)
         if car and car.get("step") == "interview":
             await _car_handle_photo(update, user_id, car, caption)
             return
 
-        # Рилс-коротышка
+        # ── 3. Рилс-коротышка ─────────────────────────────────────────────
         rs = await get_agent_session(user_id, _RS_KEY)
         if rs and rs.get("step") in ("await_topic", "await_desc_details"):
             await _rs_handle_photo(update, user_id, rs, caption)
             return
 
-        # Универсальный vision-анализ
+        # ── 4. Активные текстовые флоу — OCR и передаём как текст ─────────
+        diag_s = await get_agent_session(user_id, _DIAG_KEY)
+        style_s = await get_agent_session(user_id, _STYLE_KEY)
+        refine_s = await get_agent_session(user_id, _REFINE_KEY)
+        if diag_s or (style_s and style_s.get("step") == "await_example") or \
+                (refine_s and refine_s.get("step") == "await_instruction"):
+            b64 = await _download_photo_as_base64(update)
+            if b64:
+                status = await update.effective_chat.send_message("Читаю текст с картинки...")
+                ocr_text = await extract_text_from_image(b64)
+                await status.delete()
+                if ocr_text:
+                    if diag_s:
+                        await route_diagnostic_text(update, user_id, ocr_text, diag_s)
+                    elif style_s:
+                        from flows.misc import style_save_example
+                        await style_save_example(update, user_id, ocr_text)
+                    elif refine_s:
+                        from flows.misc import refine_do
+                        await refine_do(update, user_id, ocr_text, refine_s)
+                else:
+                    await send(update, "Не смогла прочитать текст с картинки — пришли текстом 🙏")
+            else:
+                await send(update, "Не смогла открыть картинку — попробуй ещё раз 🔁")
+            return
+
+        # ── 5. Режим сбора постов для обучения голосу — только если нет активных агентов ──
+        raw_session = await kv_get(user_id, _POST_COLLECTION_KEY)
+        if raw_session:
+            session = json.loads(raw_session)
+            await handle_post_collection(update, user_id, session)
+            return
+
+        # ── 6. Универсальный vision-анализ ────────────────────────────────
         await _handle_photo_universal(update, user_id, caption)
 
 

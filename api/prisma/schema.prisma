@@ -1,0 +1,299 @@
+// prisma/schema.prisma
+// Mira AI SMM Platform — unified data model
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS & AUTH
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           Int      @id @default(autoincrement())
+  telegramId   BigInt   @unique @map("telegram_id")
+  username     String?
+  firstName    String?  @map("first_name")
+  lastName     String?  @map("last_name")
+  languageCode String?  @map("language_code")
+  isOnboarded  Boolean  @default(false) @map("is_onboarded")
+  preferredModel String @default("claude") @map("preferred_model")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  lastActiveAt DateTime? @map("last_active_at")
+
+  // Relations
+  session       UserSession?
+  creatorProfile CreatorProfile?
+  voiceProfile   VoiceProfile?
+  subscription   Subscription?
+  trial          Trial?
+  generations    Generation[]
+  materials      Material[]
+  usageEvents    UsageEvent[]
+  referralsGiven Referral[] @relation("ReferralGiver")
+  referralReceived Referral? @relation("ReferralReceiver")
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SESSION — one row per user, upserted on every request
+// ─────────────────────────────────────────────────────────────────────────────
+
+model UserSession {
+  id               Int      @id @default(autoincrement())
+  userId           Int      @unique @map("user_id")
+  currentTool      String?  @map("current_tool")
+  currentFlow      String?  @map("current_flow")
+  currentStep      String?  @map("current_step")
+  activeResultId   Int?     @map("active_result_id")
+  generationStatus GenerationStatus @default(IDLE) @map("generation_status")
+  flowData         Json?    @map("flow_data")    // tool-specific state
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+enum GenerationStatus {
+  IDLE
+  GENERATING
+  DONE
+  ERROR
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CREATOR PROFILE — onboarding answers
+// ─────────────────────────────────────────────────────────────────────────────
+
+model CreatorProfile {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique @map("user_id")
+  niche     String?
+  audience  String?
+  tone      String?
+  goals     String?
+  platform  String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("creator_profiles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOICE PROFILE — learned writing style
+// ─────────────────────────────────────────────────────────────────────────────
+
+model VoiceProfile {
+  id                 Int      @id @default(autoincrement())
+  userId             Int      @unique @map("user_id")
+  approvedSamples    Json     @default("[]") @map("approved_samples")  // texts marked "sounds like me"
+  rejectionPatterns  Json     @default("[]") @map("rejection_patterns")
+  styleNotes         Json     @default("[]") @map("style_notes")       // manual notes
+  metaProfile        Json?    @map("meta_profile")                     // LLM-distilled summary
+  totalSignals       Int      @default(0) @map("total_signals")
+  lastLearnedAt      DateTime? @map("last_learned_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("voice_profiles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GENERATIONS — every AI output
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Generation {
+  id               Int      @id @default(autoincrement())
+  userId           Int      @map("user_id")
+  toolKey          String   @map("tool_key")   // reels_short, carousel, post, warmup, ...
+  toolName         String   @map("tool_name")
+  content          String
+  sourceInput      String?  @map("source_input")   // original topic/text used for generation
+  parentId         Int?     @map("parent_id")       // regen/refine chain
+  keyboardVersion  Int      @default(1) @map("keyboard_version")
+  completedActions Json     @default("[]") @map("completed_actions")
+  allowedActions   Json?    @map("allowed_actions")
+  metadata         Json?
+  promptSnapshot   String?  @map("prompt_snapshot")  // hashed prompt for dedup
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent      Generation?  @relation("GenerationChain", fields: [parentId], references: [id])
+  children    Generation[] @relation("GenerationChain")
+  refinements Refinement[]
+  material    Material?
+  voiceFeedback VoiceFeedback[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, toolKey])
+  @@map("generations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFINEMENTS — each edit action applied to a generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Refinement {
+  id           Int      @id @default(autoincrement())
+  generationId Int      @map("generation_id")
+  userId       Int      @map("user_id")
+  action       String                          // softer, bolder, top5, ...
+  instruction  String                          // actual prompt sent to LLM
+  inputContent String   @map("input_content")  // content before refinement
+  outputContent String  @map("output_content") // content after
+  toolKey      String   @map("tool_key")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  generation Generation @relation(fields: [generationId], references: [id], onDelete: Cascade)
+
+  @@index([generationId])
+  @@map("refinements")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MATERIALS — saved/bookmarked content library
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Material {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  generationId Int?     @unique @map("generation_id")
+  toolKey      String   @map("tool_key")
+  title        String
+  content      String
+  tags         Json     @default("[]")
+  isFavorite   Boolean  @default(false) @map("is_favorite")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  generation Generation? @relation(fields: [generationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, toolKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("materials")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOICE FEEDBACK — "sounds like me" signals
+// ─────────────────────────────────────────────────────────────────────────────
+
+model VoiceFeedback {
+  id           Int      @id @default(autoincrement())
+  userId       Int      @map("user_id")
+  generationId Int      @map("generation_id")
+  signal       VoiceSignal
+  note         String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  generation Generation @relation(fields: [generationId], references: [id], onDelete: Cascade)
+
+  @@map("voice_feedback")
+}
+
+enum VoiceSignal {
+  APPROVED   // "sounds like me ✅"
+  REJECTED   // "not my style ❌"
+  NOTE       // free text note
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUBSCRIPTIONS & TRIALS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Subscription {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @unique @map("user_id")
+  tier        String                            // 1m, 3m, 6m, 12m
+  startsAt    DateTime @map("starts_at")
+  expiresAt   DateTime @map("expires_at")
+  paymentId   String?  @map("payment_id")
+  amountEur   Float?   @map("amount_eur")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Trial {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique @map("user_id")
+  startsAt  DateTime @map("starts_at")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("trials")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REFERRALS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Referral {
+  id          Int      @id @default(autoincrement())
+  giverId     Int      @map("giver_id")
+  receiverId  Int      @unique @map("receiver_id")
+  bonusDays   Int      @default(7) @map("bonus_days")
+  paidOut     Boolean  @default(false) @map("paid_out")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  giver    User @relation("ReferralGiver",    fields: [giverId],    references: [id])
+  receiver User @relation("ReferralReceiver", fields: [receiverId], references: [id])
+
+  @@map("referrals")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USAGE & ANALYTICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model UsageEvent {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  event     String                           // generation.created, material.saved, ...
+  toolKey   String?  @map("tool_key")
+  meta      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, event])
+  @@index([createdAt])
+  @@map("usage_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CALLBACK CONTEXTS — scoped inline button state (migrated from Python bot)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model CallbackContext {
+  token           String    @id
+  userId          Int       @map("user_id")
+  toolId          String    @map("tool_id")
+  resultId        Int       @map("result_id")
+  action          String
+  keyboardVersion Int       @map("keyboard_version") @default(1)
+  metadataJson    Json?     @map("metadata_json")
+  allowRepeat     Boolean   @default(false) @map("allow_repeat")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  expiresAt       DateTime  @map("expires_at")
+  usedAt          DateTime? @map("used_at")
+
+  @@index([userId, resultId])
+  @@map("callback_contexts")
+}

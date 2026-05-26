@@ -20,11 +20,11 @@ import asyncio
 import logging
 import random
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton
 
 from db import (
     get_agent_session, save_agent_session, clear_agent_session,
-    get_profile, save_result, kv_set, kv_get,
+    get_profile, save_result, get_result_by_id, kv_set, kv_get,
 )
 from llm import complete, chat, generate_from_history, complete_long
 from security import protect
@@ -35,6 +35,7 @@ from config import (
     CAROUSEL_FORMATS_4, CAROUSEL_TRIGGERS_20,
     CAROUSEL_INTERVIEWER, build_carousel_system,
 )
+from ui.keyboards import build_result_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -459,11 +460,17 @@ async def car_generate(update: Update, user_id: int, s: dict) -> None:
     await save_agent_session(user_id, _CAR_KEY, s)
     await _save_car_snapshot(user_id, s)  # persist across session clears
 
+    _car_result_id = 0
     try:
-        await save_result(
+        _car_result_id = await save_result(
             user_id, "carousel", "Карусель",
             f"Заголовок: {headline}\nФормат: {fmt_label} · Триггер: {trigger_label}\n\n{result}",
-        )
+            source_input=s.get("topic", headline),
+            allowed_actions=[
+                "car:headline", "car:softer", "car:bolder", "car:shorten",
+                "car:add_slide", "car:trigger", "car:format",
+            ],
+        ) or 0
     except Exception as e:
         logger.warning(f"save_result carousel failed: {e}")
 
@@ -498,31 +505,42 @@ async def _send_result(
 
     # Единое сообщение: панель правок + voice feedback
     try:
-        from db import get_results as _gr, get_stats as _gs
-        from voice_learner import get_voice_stats, should_show_voice_feedback, voice_feedback_kb as _vfkb
+        from db import get_result_kb_state, get_stats as _gs
+        from voice_learner import get_voice_stats, should_show_voice_feedback
         from ui.progress_bar import voice_progress_short as _vps
+        from ui.keyboards import build_result_keyboard_with_voice
+
+        # result_row: ищем последний сохранённый carousel result для этого user
+        from db import get_results as _gr
         _recent = await _gr(user_id, limit=1)
         if _recent:
-            _rid       = _recent[0]["id"]
+            _rid      = _recent[0]["id"]
+            result_row = await get_result_kb_state(_rid)
             _vs        = await get_voice_stats(user_id)
             _total     = _vs.get("total_signals", 0)
             _gen_count = (await _gs(user_id)).get("total", 1)
-            if should_show_voice_feedback(_total, _gen_count):
+
+            if result_row and should_show_voice_feedback(_total, _gen_count):
                 _hint = _vps(_total)
-                combined_kb = _vfkb(_rid, extra_rows=[
-                    ["🎨 Мягче|car_edit_softer",    "🔥 Жёстче|car_edit_bolder"],
-                    ["✂️ Сократить|car_edit_shorten", "➕ Слайд|car_edit_add_slide"],
-                    ["💪 Триггер|car_edit_trigger",  "🎨 Формат|car_edit_format"],
-                    ["✏️ Доработать свободно|refine_last", "🔄 Другой вариант|regen_last"],
-                    ["← Меню|menu_main"],
-                ])
-                await send(update, f"Звучит как твой голос?{_hint}",
-                           parse_mode="Markdown", reply_markup=combined_kb)
+                extra = [[InlineKeyboardButton("🔁 Новая карусель", callback_data="flow_carousel")]]
+                prompt_text, combined_kb = await build_result_keyboard_with_voice(
+                    user_id, result_row, "carousel",
+                    voice_hint=_hint,
+                    extra_rows=extra,
+                )
+                await send(update, prompt_text, parse_mode="Markdown", reply_markup=combined_kb)
+            elif result_row:
+                edit_kb = await build_result_keyboard(
+                    user_id, result_row, "carousel",
+                    extra_rows=[[InlineKeyboardButton("🔁 Новая карусель", callback_data="flow_carousel")]],
+                )
+                await send(update, "Докрути под себя 👇", reply_markup=edit_kb)
             else:
                 await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
         else:
             await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[carousel] _send_result keyboard build failed: {e}")
         await send(update, "Докрути под себя 👇", reply_markup=_edit_panel_kb())
 
     # Отложенная proactive-подсказка — покажется при следующем меню
@@ -535,23 +553,44 @@ async def _send_result(
 
 # ── Панель доработки ──────────────────────────────────────────────────────────
 
-async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
+async def _apply_edit(update: Update, user_id: int, edit_key: str, result_id: int = 0) -> None:
     """
     Универсальный обработчик правок из панели.
-    Берёт last_result из сессии, применяет инструкцию, возвращает новый результат.
+    PHASE 6: Если передан result_id — грузим из БД (scoped path).
+    Fallback — legacy path через Redis-сессию.
     """
-    s = await get_agent_session(user_id, _CAR_KEY)
-    if not s or not s.get("last_result"):
-        await send(
-            update,
-            "Сессия устарела — начни карусель заново.",
-            reply_markup=kb(["🎠 Новая карусель|flow_carousel", "← Меню|menu_main"]),
-        )
-        return
+    headline = ""
+    current  = ""
+    parent_result_id = None
+
+    if result_id:
+        r = await get_result_by_id(user_id, result_id)
+        if not r:
+            await send(update, "Материал не найден.",
+                       reply_markup=kb(["← Меню|menu_main"]))
+            return
+        current = r.get("source_input") or r["content"]
+        parent_result_id = result_id
+        # Извлекаем заголовок из content
+        for line in r["content"].split("\n"):
+            if line.startswith("Заголовок:"):
+                headline = line.replace("Заголовок:", "").strip()
+                break
+        if not headline:
+            headline = r.get("source_input", "")
+    else:
+        s = await get_agent_session(user_id, _CAR_KEY)
+        if not s or not s.get("last_result"):
+            await send(
+                update,
+                "Сессия устарела — начни карусель заново.",
+                reply_markup=kb(["🎠 Новая карусель|flow_carousel", "← Меню|menu_main"]),
+            )
+            return
+        current  = s["last_result"]
+        headline = s.get("headline", "")
 
     instruction = _REFINE_PROMPTS.get(edit_key, "Улучши карусель.")
-    current     = s["last_result"]
-    headline    = s.get("headline", "")
     profile     = await get_profile(user_id)
 
     system = (
@@ -585,25 +624,34 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
         await send(update, "Пустой ответ — попробуй ещё раз.", reply_markup=_edit_panel_kb())
         return
 
-    # Сохраняем новую версию + трекаем завершённые
-    _car_completed = set(s.get("completed_actions", []))
-    _car_completed.add(edit_key)
-    s["last_result"] = new_result
-    s["completed_actions"] = list(_car_completed)
-    await save_agent_session(user_id, _CAR_KEY, s)
-    await _save_car_snapshot(user_id, s)  # persist across session clears
-
+    # Сохраняем новый результат
+    new_result_id = 0
     try:
-        fmt_label    = s.get("fmt_label", "")
-        trigger_label = s.get("trigger_label", "")
-        await save_result(
+        # Сохраняем legacy-сессию для snapshot
+        s_now = await get_agent_session(user_id, _CAR_KEY) or {}
+        fmt_label     = s_now.get("fmt_label", "")
+        trigger_label = s_now.get("trigger_label", "")
+        _car_completed = set(s_now.get("completed_actions", []))
+        _car_completed.add(edit_key)
+        s_now["last_result"] = new_result
+        s_now["completed_actions"] = list(_car_completed)
+        await save_agent_session(user_id, _CAR_KEY, s_now)
+        await _save_car_snapshot(user_id, s_now)
+
+        new_result_id = await save_result(
             user_id, "carousel", "Карусель (правка)",
             f"Заголовок: {headline}\nФормат: {fmt_label} · Триггер: {trigger_label}\n\n{new_result}",
-        )
-    except Exception:
-        pass
+            source_input=headline,
+            parent_result_id=parent_result_id,
+            allowed_actions=[
+                "car:headline", "car:softer", "car:bolder", "car:shorten",
+                "car:add_slide", "car:trigger", "car:format",
+            ],
+        ) or 0
+    except Exception as e:
+        logger.warning(f"[carousel] save_result edit failed: {e}")
 
-    # Отправляем
+    # Отправляем контент
     full = f"🎠 *{headline}*\n\n{new_result}"
     CHUNK = 3800
     if len(full) <= CHUNK:
@@ -616,39 +664,57 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
-    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb(completed=_car_completed))
+    # Клавиатура для нового результата
+    if new_result_id:
+        try:
+            from db import get_result_kb_state
+            new_row = await get_result_kb_state(new_result_id)
+            if new_row:
+                edit_kb = await build_result_keyboard(
+                    user_id, new_row, "carousel",
+                    extra_rows=[[InlineKeyboardButton("🔁 Новая карусель", callback_data="flow_carousel")]],
+                )
+                await send(update, "Ещё докрутить?", reply_markup=edit_kb)
+                return
+        except Exception as e:
+            logger.warning(f"[carousel] edit keyboard build failed: {e}")
+
+    # Fallback на legacy keyboard
+    s_now = await get_agent_session(user_id, _CAR_KEY) or {}
+    _done = set(s_now.get("completed_actions", []))
+    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb(completed=_done))
 
 
-async def car_edit_headline(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "headline")
+async def car_edit_headline(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "headline", result_id=result_id)
 
 
-async def car_edit_add_slide(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "add_slide")
+async def car_edit_add_slide(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "add_slide", result_id=result_id)
 
 
-async def car_edit_shorten(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "shorten")
+async def car_edit_shorten(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "shorten", result_id=result_id)
 
 
-async def car_edit_softer(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "tone_softer")
+async def car_edit_softer(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "tone_softer", result_id=result_id)
 
 
-async def car_edit_bolder(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "tone_bolder")
+async def car_edit_bolder(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "tone_bolder", result_id=result_id)
 
 
-async def car_edit_trigger_stronger(update: Update, user_id: int) -> None:
-    await _apply_edit(update, user_id, "trigger_stronger")
+async def car_edit_trigger_stronger(update: Update, user_id: int, result_id: int = 0) -> None:
+    await _apply_edit(update, user_id, "trigger_stronger", result_id=result_id)
 
 
-async def car_edit_format(update: Update, user_id: int) -> None:
+async def car_edit_format(update: Update, user_id: int, result_id: int = 0) -> None:
     """Показываем выбор формата."""
     await send(update, "Выбери формат 👇", reply_markup=_format_choice_kb())
 
 
-async def car_edit_trigger(update: Update, user_id: int) -> None:
+async def car_edit_trigger(update: Update, user_id: int, result_id: int = 0) -> None:
     """Показываем выбор триггера."""
     await send(update, "Выбери триггер 👇", reply_markup=_trigger_choice_kb())
 

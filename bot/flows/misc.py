@@ -331,26 +331,31 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
 
 
 async def regen_last(update: Update, user_id: int) -> None:
+    """Deprecated: использует limit=1 — небезопасно при конкурентных сессиях.
+    Оставлен для обратной совместимости со старыми legacy кнопками.
+    Новые кнопки используют regen_by_id(result_id) через scoped callbacks.
+    """
     results = await get_results(user_id, limit=1)
     if not results:
         await send(update, "Нет материалов. Создай что-нибудь сначала.",
                    reply_markup=kb(["← Меню|menu_main"]))
         return
-    # BUG #5 FIX: mark that regen just ran so refine_start can inform the user
-    try:
-        from db import kv_set as _kvs
-        await _kvs(user_id, "__regen_just_ran__", "1", ttl=10)
-    except Exception:
-        pass
     await regen_by_id(update, user_id, results[0]["id"])
 
 
 async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
+    """PHASE 9: безопасная регенерация по конкретному result_id.
+    Использует source_input из БД — не берёт 'последний' результат по времени.
+    """
     r = await get_result_by_id(user_id, result_id)
     if not r:
         await send(update, "Материал не найден.", reply_markup=kb(["← Меню|menu_main"]))
         return
-    prompt = f"Оригинал:\n{r['content']}"
+
+    # PHASE 9 FIX: используем source_input если есть — это исходник до правок
+    source = r.get("source_input") or r["content"]
+    prompt = f"Оригинал:\n{source}"
+
     status = await update.effective_chat.send_message("Пишу другой вариант — ищу другой угол...")
     import asyncio as _aio
     _tt = _aio.create_task(typing_loop(update.effective_chat))
@@ -365,39 +370,60 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
         result = None
     finally:
         _tt.cancel()
+
     await safe_delete(status)
+
     if not result:
         await send(update, "Не вышло с первого раза — все данные на месте, жми 🔁",
-                   reply_markup=kb(["🔄 Ещё раз|regen_last", "← Меню|menu_main"]))
+                   reply_markup=kb([f"🔄 Ещё раз|regen:{result_id}:1", "← Меню|menu_main"]))
         return
+
+    # Сохраняем с parent_result_id и source_input для цепочки
+    _new_regen_id = 0
     try:
-        await save_result(user_id, r["agent_key"], r["agent_name"], result)
+        _new_regen_id = await save_result(
+            user_id, r["agent_key"], r["agent_name"], result,
+            source_input=source,
+            parent_result_id=result_id,
+            allowed_actions=r.get("allowed_actions"),
+        ) or 0
     except Exception:
         pass
+
     # Стрик
     try:
         from ui.home import update_streak_on_result as _usr
         await _usr(user_id)
     except Exception:
         pass
+
+    # Scoped кнопки для нового результата
+    if _new_regen_id:
+        _regen_cb  = f"regen:{_new_regen_id}:1"
+        _refine_cb = f"refine:{_new_regen_id}:1"
+    else:
+        _regen_cb  = f"regen:{result_id}:1"
+        _refine_cb = "refine_last"
+
     await send(
         update,
         f"🔄 *Другой вариант:*\n\n{result}",
         parse_mode="Markdown",
         reply_markup=kb(
-            ["✏️ Доработать|refine_last", "🔄 Ещё вариант|regen_last"],
+            [f"✏️ Доработать|{_refine_cb}", f"🔄 Ещё вариант|{_regen_cb}"],
             ["← Меню|menu_main"],
         ),
     )
+
     try:
         import asyncio
-        from db import get_results as _gr
         from voice_learner import voice_feedback_kb
-        _recent = await _gr(user_id, limit=1)
-        if _recent:
+        if _new_regen_id:
             await asyncio.sleep(0.5)
             await send(update, "Звучит как твой голос?",
-                       reply_markup=voice_feedback_kb(_recent[0]["id"]))
+                       reply_markup=voice_feedback_kb(_new_regen_id))
+    except Exception:
+        pass
     except Exception:
         pass
 
