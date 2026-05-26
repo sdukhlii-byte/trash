@@ -897,7 +897,7 @@ async def style_menu(update: Update, user_id: int) -> None:
     rows = [["📝 Добавить свои посты|style_add"]]
     if ex_count > 0:
         rows.append(["👁 Посмотреть добавленные|style_view", "🗑 Очистить|style_clear"])
-    rows.append(["← Кабинет|sub_cabinet"])
+    rows.append(["← Меню|menu_main"])
     await send(update, text, parse_mode="Markdown", reply_markup=kb(*rows))
 
 
