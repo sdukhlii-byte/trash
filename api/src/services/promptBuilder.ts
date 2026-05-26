@@ -47,7 +47,7 @@ interface BuildRefinePromptParams {
 
 // ── Profile context builder ────────────────────────────────────────────────────
 
-function buildProfileCtx(p?: CreatorProfile): string {
+function buildProfileCtx(p?: CreatorProfile | null): string {
   if (!p) return ''
   const parts: string[] = []
   if (p.niche)    parts.push(`Ниша: ${p.niche}`)
@@ -58,7 +58,7 @@ function buildProfileCtx(p?: CreatorProfile): string {
 
 // ── Voice context builder ──────────────────────────────────────────────────────
 
-function buildVoiceCtx(v?: VoiceProfile): string {
+function buildVoiceCtx(v?: VoiceProfile | null): string {
   if (!v) return ''
   const parts: string[] = []
 
