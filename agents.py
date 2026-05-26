@@ -867,6 +867,15 @@ async def generate(update: Update, user_id: int,
         if cip.get("audience_language_patterns"):
             cip_parts.append(f"Язык аудитории (используй в хуках): {cip['audience_language_patterns']}")
 
+        # #15: Competitor insight → hook differentiation (reels, carousel, qi_start)
+        if cip.get("positioning_statement") and spec.key in ("reels_short", "reels_adapt", "carousel", "qi_start"):
+            cip_parts.append(
+                f"КОНКУРЕНТНЫЙ КОНТЕКСТ ДЛЯ ХУКОВ: если конкурент в нише использует pain-хуки (боль/страх) — "
+                f"попробуй identity-хуки как контрпозиционирование (узнавание + принадлежность). "
+                f"Если конкурент использует авторитет — используй близость и честность. "
+                f"Позиционирование автора уже определено: {cip['positioning_statement']}"
+            )
+
         # Format affinity: surfaces which formats the audience has responded to
         _affinity = cip.get("content_format_affinity", {})
         if _affinity:
@@ -1474,6 +1483,13 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
                 "Можно добавить конкретный срок если есть логическое основание. "
                 "ЗАЩИЩЕНО: не создавай искусственного дефицита — аудитория на этой стадии чувствует манипуляцию."
             )
+
+    # softer_confirmed: user acknowledged the conversion-stage warning, proceed without another warning
+    if edit_key == "softer_confirmed":
+        instruction = (
+            "Смягчи текст: убери давление и срочность, сделай тон мягче и человечнее. "
+            "ВАЖНО: сохрани суть оффера и его конкретность — меняй только интенсивность, не предмет."
+        )
 
     if edit_key == "softer" and funnel_stage == "conversion":
         # Warn before softening a conversion text
