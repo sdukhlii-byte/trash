@@ -48,7 +48,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       const amountEur = parseFloat(body.amount ?? '0')
 
       if (!orderId?.startsWith('uid_')) {
-        logger.warn('[webhook/lava] unknown order format:', orderId)
+        logger.warn({ orderId }, '[webhook/lava] unknown order format')
         return reply.send({ ok: true })
       }
 
@@ -89,7 +89,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true })
 
     } catch (err) {
-      logger.error('[webhook/lava] error:', err)
+      logger.error({ err }, '[webhook/lava] error')
       return reply.code(500).send({ ok: false, error: 'Internal error' })
     }
   })
