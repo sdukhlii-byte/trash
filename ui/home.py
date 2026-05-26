@@ -175,18 +175,28 @@ async def show_home(update: Update, user_id: int) -> None:
 
 
 def _home_kb(total: int, voice_signals: int):
+    # Голос — первый, это УТП и самый быстрый путь
     rows = [
-        ["🎙 Расскажи голосом — так быстрее|voice_hint"],
-        ["✍️ Написать пост|agent_start_post",    "🎬 Рилс + хуки|flow_reels_short"],
-        ["🎠 Карусель|flow_carousel",             "🔥 Прогрев|agent_start_warmup"],
-        ["🧩 Все инструменты|menu_more"],
+        ["🎙 Говори голосом — пойму и сделаю|voice_hint"],
     ]
 
+    # Если стиль ещё не обучен — показываем это как приоритет №2
+    # Это напрямую влияет на качество всех генераций
     if voice_signals < 3:
-        rows.insert(1, ["🎤 Научить Миру моему стилю|style_menu"])
+        rows.append(["✨ Добавить свои посты → Мира пишет как я|style_menu"])
 
+    # Топ форматов: пост и рилс — ежедневные, карусель и сторис — еженедельные
+    # Прогрев убран из главного: разовый инструмент, не ежедневный
     rows += [
-        ["📚 Мои материалы|my_results",           "📈 Прогресс|my_stats"],
-        ["💬 Спроси Миру|mode_chat",              "👤 Кабинет|sub_cabinet"],
+        ["✍️ Пост|agent_start_post",        "🎬 Рилс + хуки|flow_reels_short"],
+        ["🎠 Карусель|flow_carousel",        "📸 Сторис|agent_start_stories"],
     ]
+
+    # Диагностика выше «всех инструментов» — высокая ценность, недооценена
+    rows.append(["🩺 Что буксует в контенте?|diagnostic_start"])
+    rows.append(["🧩 Все инструменты|menu_more"])
+
+    # Служебное — одной строкой, не занимает место у инструментов
+    rows.append(["📚 Материалы|my_results", "💬 Чат с Мирой|mode_chat", "👤 Кабинет|sub_cabinet"])
+
     return kb(*rows)
