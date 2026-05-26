@@ -267,6 +267,30 @@ async def build_voice_context(user_id: int) -> str:
             rej_text = "\n".join(f"• Avoid: {r}" for r in rejections[:4])
             parts.append(f"<rejection_patterns>\n{rej_text}\n</rejection_patterns>")
 
+        # 5. Текущий голосовой контекст (эмоция, тема — из последнего голосового)
+        try:
+            import json as _json
+            from db import kv_get as _kv_get
+            _vctx_raw = await _kv_get(user_id, "__voice_ctx__")
+            if _vctx_raw:
+                _vctx = _json.loads(_vctx_raw)
+                _meta_parts = []
+                if _vctx.get("emotional_tone"):
+                    _meta_parts.append(f"Эмоция автора: {_vctx['emotional_tone']}")
+                if _vctx.get("key_theme"):
+                    _meta_parts.append(f"Тема запроса: {_vctx['key_theme']}")
+                if _vctx.get("urgency") == "high":
+                    _meta_parts.append("Срочность: высокая — дай быстрый результат")
+                if _vctx.get("creator_context"):
+                    _meta_parts.append(f"Контекст автора: {_vctx['creator_context']}")
+                if _meta_parts:
+                    parts.append(
+                        "VOICE SESSION CONTEXT (из текущего голосового запроса):\n"
+                        f"<voice_session>\n" + "\n".join(_meta_parts) + "\n</voice_session>"
+                    )
+        except Exception:
+            pass
+
     except Exception as e:
         logger.warning("build_voice_context failed uid=%s: %s", user_id, e)
         return ""
@@ -275,6 +299,48 @@ async def build_voice_context(user_id: int) -> str:
         return ""
 
     return "\n\n" + "\n\n".join(parts)
+
+
+async def update_voice_meta_profile(user_id: int, voice_ctx: dict) -> None:
+    """
+    Обновляет мета-профиль голоса после каждого голосового сообщения.
+    Сохраняет паттерны речи для долгосрочной персонализации (фаза 4.1).
+    EMA по последним 5 сигналам через Redis.
+    """
+    if not voice_ctx:
+        return
+    try:
+        import json as _json
+        from db import kv_get as _kv_get, kv_set as _kv_set
+        _KEY = "__voice_meta_profile__"
+        raw = await _kv_get(user_id, _KEY)
+        meta = _json.loads(raw) if raw else {
+            "dominant_tones": [],
+            "content_type_history": [],
+            "urgency_signals": 0,
+            "message_count": 0,
+        }
+
+        meta["message_count"] = meta.get("message_count", 0) + 1
+
+        tone = voice_ctx.get("emotional_tone")
+        if tone:
+            tones = meta.get("dominant_tones", [])
+            tones.append(tone)
+            meta["dominant_tones"] = tones[-5:]  # последние 5
+
+        ct = voice_ctx.get("content_type_hint")
+        if ct:
+            hist = meta.get("content_type_history", [])
+            hist.append(ct)
+            meta["content_type_history"] = hist[-10:]
+
+        if voice_ctx.get("urgency") == "high":
+            meta["urgency_signals"] = meta.get("urgency_signals", 0) + 1
+
+        await _kv_set(user_id, _KEY, _json.dumps(meta, ensure_ascii=False), ttl=86400 * 30)
+    except Exception as e:
+        logger.debug("update_voice_meta_profile failed uid=%s: %s", user_id, e)
 
 
 async def get_voice_stats(user_id: int) -> dict:
@@ -301,11 +367,16 @@ _FEEDBACK_SHOW_EVERY = 5   # after 10 signals: show only every N generations
 
 def should_show_voice_feedback(total_signals: int, generation_count: int) -> bool:
     """
-    Avoid fatigue: show voice feedback on every generation until 10 signals,
-    then only every 5 generations.
+    Умная логика показа voice feedback — без fatigue.
+
+    До 5 сигналов: показываем часто (каждые 2 генерации) — учим пользователя.
+    5-15 сигналов: каждые 3 генерации.
+    15+ сигналов: каждые 5 генерации — Мира уже знает голос, feedback реже.
     """
-    if total_signals < 10:
-        return True
+    if total_signals < 5:
+        return (generation_count % 2) == 0
+    if total_signals < 15:
+        return (generation_count % 3) == 0
     return (generation_count % _FEEDBACK_SHOW_EVERY) == 0
 
 

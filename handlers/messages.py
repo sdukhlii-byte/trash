@@ -37,6 +37,7 @@ from config import CHAT_SYSTEM, MODELS
 import agents as ag
 from security import ADMIN_ID
 from voice_learner import handle_voice_note_text
+from voice_normalizer import normalize_voice
 
 logger = logging.getLogger(__name__)
 
@@ -150,20 +151,39 @@ async def _react_to_message(update: Update, text: str) -> None:
 
 # ── Voice handler ──────────────────────────────────────────────────────────────
 
+# Живые статусы в стиле Миры (фаза 1.2)
+import random as _random
+_VOICE_STATUS_MESSAGES = [
+    "Слышу тебя — уже думаю над этим...",
+    "Слушаю и разбираюсь...",
+    "Минуту, структурирую что тут...",
+    "Слышу — сейчас разберу...",
+]
+
+
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Voice-first handler: транскрипция → нормализация → прямой routing.
+
+    Изменения по анализу:
+    - Убрано подтверждение «Отправить как запрос?» (фаза 1.1)
+    - Живые статусные сообщения в стиле Миры (фаза 1.2)
+    - VoiceNormalizer между Whisper и classify_intent (фаза 1.3)
+    - Транскрипция не показывается пользователю, сохраняется в metadata
+    """
     user_id = update.effective_user.id
     state = await get_user_state(user_id)
     if not has_access(state):
         await show_paywall(update, user_id, state)
         return
 
-    # BUG #6 FIX: acquire per-user lock to prevent concurrent voice+text race
+    # Per-user lock — предотвращает гонку voice+text
     lock = await _get_user_lock(user_id)
     if lock.locked():
         logger.info(f"[voice dedup] user={user_id} — запрос уже в обработке")
         return
     async with lock:
-        # Мгновенная реакция на голосовое — показывает что услышала
+        # Мгновенная реакция 👀 — показывает что услышала
         try:
             from ui.media import set_reaction
             msg = update.message
@@ -173,31 +193,47 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass
 
-        status = await update.message.reply_text("Слушаю... 🎙")
+        # Живой статус — не «Слушаю... 🎙», а в стиле Миры
+        status_text = _random.choice(_VOICE_STATUS_MESSAGES)
+        status = await update.message.reply_text(status_text)
+
         try:
             file     = await update.message.voice.get_file()
             ogg_data = await file.download_as_bytearray()
-            text     = await transcribe(bytes(ogg_data))
+            raw_text = await transcribe(bytes(ogg_data))
         except Exception as e:
             logger.error(f"Whisper failed: {e}")
             await safe_delete(status)
             await send(update, "Голосовые сообщения пока недоступны. Напиши текстом 🙏")
             return
 
-        await safe_delete(status)
-
-        if not text or not text.strip():
+        if not raw_text or not raw_text.strip():
+            await safe_delete(status)
             await send(update, "Не расслышала — попробуй ещё раз.")
             return
 
-        clean = text.strip()
-        await kv_set(user_id, "__voice_pending__", clean, ttl=3600)
-        await send(
-            update,
-            f"🎙 _Расшифровала:_\n\n{clean}\n\nОтправить как запрос?",
-            parse_mode="Markdown",
-            reply_markup=kb(["✅ Отправить|voice_send"], ["❌ Отмена|voice_cancel"]),
-        )
+        raw_clean = raw_text.strip()
+
+        # VoiceNormalizer: структурируем транскрипцию перед routing'ом
+        voice_ctx = await normalize_voice(raw_clean)
+        normalized = voice_ctx.get("normalized_request") or raw_clean
+
+        # Сохраняем транскрипцию в metadata (не показываем пользователю)
+        await kv_set(user_id, "__voice_raw__", raw_clean, ttl=3600)
+        await kv_set(user_id, "__voice_ctx__", __import__("json").dumps(
+            voice_ctx, ensure_ascii=False), ttl=3600)
+
+        # Обновляем мета-профиль голоса (накапливаем паттерны речи, фаза 4.1)
+        try:
+            from voice_learner import update_voice_meta_profile
+            asyncio.create_task(update_voice_meta_profile(user_id, voice_ctx))
+        except Exception:
+            pass
+
+        await safe_delete(status)
+
+        # Прямой routing — как для текстового сообщения
+        await _route(update, ctx, user_id, normalized)
 
 
 # ── Photo handler ──────────────────────────────────────────────────────────────
@@ -593,9 +629,10 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         rows.append(["☰ Меню|menu_main"])
 
         topic_display = intent.topic or text[:60]
+        # Voice-first формулировка (не «Выбери инструмент», а разговорная)
         await send(
             update,
-            f"Понял — *«{topic_display}»*\n\nВыбери инструмент:",
+            f"Слышу — *«{topic_display}»*\n\nХочешь именно это?",
             parse_mode="Markdown",
             reply_markup=kb(*rows),
         )

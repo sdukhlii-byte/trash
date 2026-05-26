@@ -267,7 +267,16 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
         pass
 
     prompt = f"Оригинальный текст:\n{original}\n\nЗадача: {instruction}{_strat_ctx}"
-    status = await update.effective_chat.send_message("Дорабатываю — держи...")
+
+    # Голосовой статус — живой, в стиле Миры (фаза 2.3)
+    try:
+        from voice_refine_parser import detect_refine_intent, get_refine_status
+        _refine_label = detect_refine_intent(instruction)
+        _status_text = get_refine_status(_refine_label) if _refine_label else "Дорабатываю — держи..."
+    except Exception:
+        _status_text = "Дорабатываю — держи..."
+
+    status = await update.effective_chat.send_message(_status_text)
     try:
         from voice_learner import build_voice_context
         profile    = await get_profile(user_id)

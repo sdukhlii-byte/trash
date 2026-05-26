@@ -843,12 +843,14 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await send(update, "🗑 Примеры стиля удалены.", reply_markup=kb(["← Кабинет|sub_cabinet"]))
         return
 
-    # ── Голосовое подтверждение ───────────────────────────────────────────────
+    # ── Голосовое подтверждение (устаревшее — голос теперь роутится напрямую) ──
     if data == "voice_send":
+        # Этот callback больше не используется — голос идёт сразу в routing
+        # Оставлен для совместимости со старыми сообщениями в чате
         pending = await kv_get(user_id, "__voice_pending__")
         await kv_del(user_id, "__voice_pending__")
         if not pending:
-            await edit(query, "Нет ожидающего запроса.", reply_markup=kb(["← Меню|menu_main"]))
+            await edit(query, "Запрос уже отправлен автоматически.", reply_markup=kb(["← Меню|menu_main"]))
             return
         await edit(query, f"🎙 _{pending}_", parse_mode="Markdown")
         from handlers.messages import _route

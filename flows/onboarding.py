@@ -37,9 +37,11 @@ async def _typing_loop(chat) -> None:
 _ONB_STEPS = ["niche", "audience", "tone", "push_time"]
 
 _ONB_Q_NICHE = (
-    "С чем работаешь?\n\n"
-    "_Ниша, тема, экспертиза — как есть. "
-    "Фитнес, психология, бизнес, дизайн — или что-то своё._"
+    "Привет! Я Мира — твой SMM-стратег.\n\n"
+    "Расскажи голосом или текстом: с чем работаешь и кто твои люди?\n\n"
+    "_Говори как есть — ниша, тема, аудитория. "
+    "Фитнес, психология, бизнес, дизайн — или что-то своё.\n"
+    "Голосом — так я лучше пойму твою подачу 🎙_"
 )
 
 # ── LLM prompts для умных ack ─────────────────────────────────────────────────
@@ -254,8 +256,23 @@ async def handle_onboarding(
     if idx >= len(_ONB_STEPS):
         return False
 
+    # Нормализация голосового ввода при онбординге (шаги 0-1 — ниша и аудитория)
+    _input_text = text
+    if idx in (0, 1) and len(text) > 40:
+        try:
+            from voice_normalizer import normalize_voice
+            _nctx = await normalize_voice(text)
+            # Для онбординга берём нормализованный запрос — он чище
+            if _nctx.get("normalized_request"):
+                _input_text = _nctx["normalized_request"]
+                # Если есть creator_context — добавляем к нише
+                if idx == 0 and _nctx.get("creator_context"):
+                    _input_text = f"{_input_text} ({_nctx['creator_context']})"
+        except Exception:
+            pass
+
     data = state.get("data", {})
-    data[_ONB_STEPS[idx]] = text
+    data[_ONB_STEPS[idx]] = _input_text
     state["data"] = data
     state["step"] = idx + 1
     await save_onboarding_state(user_id, state)

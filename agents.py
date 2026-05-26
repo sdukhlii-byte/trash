@@ -157,6 +157,26 @@ def _get_agent_refine_prompts(agent_key: str) -> dict[str, str]:
     return _AGENT_REFINE_PROMPTS.get(agent_key, _AGENT_REFINE_PROMPTS["_default"])
 
 
+def _voice_followup_rows(agent_key: str) -> list:
+    """
+    Возвращает 1-2 умных предложения после результата — вместо generic «← Меню».
+    Основано на _AGENT_SIBLINGS из intent_router (фаза 1.4).
+    """
+    from intent_router import get_agent_suggestions, AGENT_EMOJI, AGENT_NAMES
+    siblings = get_agent_suggestions(agent_key)
+    rows = []
+    for sibling in siblings[:2]:
+        cb = (
+            "flow_reels_short" if sibling == "reels_short" else
+            "flow_carousel"    if sibling == "carousel"    else
+            f"agent_start_{sibling}"
+        )
+        emoji = AGENT_EMOJI.get(sibling, "🤖")
+        name  = AGENT_NAMES.get(sibling, sibling)
+        rows.append([f"{emoji} {name}|{cb}"])
+    return rows
+
+
 def _agent_edit_panel_kb(spec_key: str, completed: set | None = None,
                           refinement_count: int = 0) -> object:
     """
@@ -1370,8 +1390,15 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     except Exception:
         pass
 
-    # INTER-TOOL SUGGESTIONS (#29) — предлагаем смежный инструмент с сохранением контекста
+    # УМНЫЕ FOLLOW-UPS (фаза 1.4) — 2 контекстных предложения вместо generic меню.
+    # Если запрос был голосовым — используем theme из voice_ctx.
+    # Если нет голосового контекста — fallback на INTER_TOOL_MAP.
     try:
+        import json as _json
+        _voice_ctx_raw = await __import__("db").kv_get(user_id, "__voice_ctx__")
+        _voice_ctx = _json.loads(_voice_ctx_raw) if _voice_ctx_raw else {}
+        _key_theme = _voice_ctx.get("key_theme") or ""
+
         _INTER_TOOL_MAP = {
             "reels_short":  ("carousel",     "Хочешь карусель на эту же тему? Сохраню контекст →", "💎 Карусель на эту тему|inter_tool_carousel"),
             "carousel":     ("reels_short",  "Хочешь Рилс-хук для этой карусели?",                "🎬 Рилс-хук|inter_tool_reels_short"),
@@ -1382,7 +1409,9 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
         }
         if spec.key in _INTER_TOOL_MAP:
             _it_target, _it_text, _it_btn = _INTER_TOOL_MAP[spec.key]
-            # Only show if it's not dismissed already (simple: always show, no state)
+            # Если есть голосовая тема — персонализируем текст
+            if _key_theme:
+                _it_text = f"Хочешь {_it_text.split('Хочешь')[-1].strip()} по теме «{_key_theme}»?"
             await asyncio.sleep(0.8)
             await send(
                 update,
