@@ -28,35 +28,46 @@ export interface AuthTokenPayload {
 // User
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type UserState = 'new' | 'onboarded' | 'trial' | 'subscribed' | 'expired'
+export type UserState =
+  | 'new'
+  | 'onboarded'
+  | 'trial'
+  | 'subscribed'
+  | 'expired'
 
 export interface UserProfile {
   id: number
   telegramId: number
-  username?: string
-  firstName?: string
+  username?: string | null
+  firstName?: string | null
   state: UserState
   isOnboarded: boolean
   preferredModel: string
-  creatorProfile?: CreatorProfile
-  subscription?: SubscriptionInfo
+  creatorProfile?: CreatorProfile | null
+  subscription?: SubscriptionInfo | null
   voiceProgress: VoiceProgress
   stats: UserStats
 }
 
 export interface CreatorProfile {
-  niche?: string
-  audience?: string
-  tone?: string
-  goals?: string
-  platform?: string
+  id?: number
+  userId?: number
+
+  niche?: string | null
+  audience?: string | null
+  tone?: string | null
+  goals?: string | null
+  platform?: string | null
+
+  createdAt?: Date
+  updatedAt?: Date
 }
 
 export interface VoiceProgress {
   totalSignals: number
-  level: number           // 0-5
-  percentage: number      // 0-100
-  label: string           // "Начинающий" / "Продвинутый" / ...
+  level: number
+  percentage: number
+  label: string
 }
 
 export interface UserStats {
@@ -88,13 +99,24 @@ export interface ToolDefinition {
   maxQuestions: number
   acceptsPhotos: boolean
   model: string
-  photo?: string
+  photo?: string | null
 }
 
 export interface ToolInputSchema {
-  topic?: { type: 'string'; required: boolean }
-  description?: { type: 'string'; required: boolean }
-  photos?: { type: 'array'; required: boolean }
+  topic?: {
+    type: 'string'
+    required: boolean
+  }
+
+  description?: {
+    type: 'string'
+    required: boolean
+  }
+
+  photos?: {
+    type: 'array'
+    required: boolean
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,9 +130,9 @@ export interface GenerateRequest {
 }
 
 export interface GenerateInput {
-  topic?: string
-  description?: string
-  photos?: string[]     // base64
+  topic?: string | null
+  description?: string | null
+  photos?: string[]
   interviewAnswers?: InterviewAnswer[]
   pickedVariant?: number
 }
@@ -128,8 +150,10 @@ export interface GenerateResponse {
   allowedActions: string[]
   completedActions: string[]
   isComplete: boolean
+
   nextStep?: 'interview' | 'pick' | 'done'
-  interviewQuestion?: string
+
+  interviewQuestion?: string | null
   variants?: string[]
 }
 
@@ -140,12 +164,12 @@ export interface GenerateResponse {
 export interface RefineRequest {
   generationId: number
   action: string
-  metadata?: Record<string, string>  // e.g. { style: 'curiosity' }
+  metadata?: Record<string, string>
 }
 
 export interface RefineResponse {
-  generationId: number          // ID нового поколения
-  parentId: number              // исходный generation
+  generationId: number
+  parentId: number
   content: string
   action: string
   keyboardVersion: number
@@ -159,7 +183,7 @@ export interface RefineResponse {
 
 export interface MaterialSaveRequest {
   generationId: number
-  title?: string
+  title?: string | null
   tags?: string[]
 }
 
@@ -179,7 +203,7 @@ export interface MaterialItem {
   content: string
   tags: string[]
   isFavorite: boolean
-  generationId?: number
+  generationId?: number | null
   createdAt: string
 }
 
@@ -190,14 +214,18 @@ export interface MaterialItem {
 export interface VoiceFeedbackRequest {
   generationId: number
   signal: 'approved' | 'rejected'
-  note?: string
+  note?: string | null
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Subscription
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SubscriptionTier = '1m' | '3m' | '6m' | '12m'
+export type SubscriptionTier =
+  | '1m'
+  | '3m'
+  | '6m'
+  | '12m'
 
 export interface SubscriptionActivateRequest {
   tier: SubscriptionTier
@@ -220,6 +248,6 @@ export interface PaginatedResponse<T> {
   items: T[]
   total: number
   page: number
-  limit: number
+ limit: number
   hasMore: boolean
 }
