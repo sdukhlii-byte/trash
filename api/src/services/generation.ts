@@ -40,8 +40,8 @@ export class GenerationService {
       const { system, userPrompt } = await buildPrompt({
         toolKey:       req.toolKey,
         input:         req.input,
-        creatorProfile: creatorProfile ?? undefined,
-        voiceProfile:  voiceProfile ?? undefined,
+        creatorProfile: creatorProfile,
+        voiceProfile:  voiceProfile,
       })
 
       // 6. Update session status
@@ -134,8 +134,8 @@ export class GenerationService {
       const { system, userPrompt } = await buildPrompt({
         toolKey:       original.toolKey,
         input:         { topic: sourceInput },
-        creatorProfile: creatorProfile ?? undefined,
-        voiceProfile:  voiceProfile ?? undefined,
+        creatorProfile: creatorProfile,
+        voiceProfile:  voiceProfile,
         isRegen:       true,
         originalContent: sourceInput,
       })
