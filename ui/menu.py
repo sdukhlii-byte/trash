@@ -27,7 +27,7 @@ def main_menu_kb() -> object:
         ["🎠 Карусель|flow_carousel",         "📸 Сторис|agent_start_stories"],
         ["🩺 Что буксует в контенте?|diagnostic_start"],
         ["🧩 Все инструменты|menu_more"],
-        ["📚 Материалы|my_results", "💬 Чат с Мирой|mode_chat", "👤 Кабинет|sub_cabinet"],
+        ["✨ Мой стиль|style_menu", "📚 Материалы|my_results", "👤 Кабинет|sub_cabinet"],
     )
 
 
