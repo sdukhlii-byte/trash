@@ -24,7 +24,7 @@ from telegram import Update
 
 from db import (
     get_agent_session, save_agent_session, clear_agent_session,
-    get_profile, save_result,
+    get_profile, save_result, kv_set, kv_get,
 )
 from llm import complete, chat, generate_from_history, complete_long
 from security import protect
@@ -40,7 +40,40 @@ logger = logging.getLogger(__name__)
 
 
 
-_CAR_KEY = "carousel_flow"
+_CAR_KEY          = "carousel_flow"
+_CAR_SNAPSHOT_TTL = 7 * 24 * 3600   # 7 дней — достаточно чтобы вернуться к правкам
+
+
+async def _save_car_snapshot(user_id: int, s: dict) -> None:
+    """Сохраняет последний результат карусели в KV независимо от активной сессии.
+    Позволяет редактировать карусель даже после начала новой."""
+    import json as _json
+    try:
+        snapshot = {
+            "last_result":    s.get("last_result", ""),
+            "headline":       s.get("headline", ""),
+            "fmt_label":      s.get("fmt_label", ""),
+            "trigger_label":  s.get("trigger_label", ""),
+            "fmt":            s.get("fmt", ""),
+            "trigger":        s.get("trigger", ""),
+            "completed_actions": s.get("completed_actions", []),
+        }
+        await kv_set(user_id, "__car_snapshot__", _json.dumps(snapshot, ensure_ascii=False),
+                     ttl=_CAR_SNAPSHOT_TTL)
+    except Exception:
+        pass
+
+
+async def _load_car_snapshot(user_id: int) -> dict | None:
+    """Восстанавливает последний результат карусели из KV."""
+    import json as _json
+    try:
+        raw = await kv_get(user_id, "__car_snapshot__")
+        if raw:
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return None
 
 # Системный промпт для автовыбора формата+триггера под профиль
 _AUTO_PICK_SYSTEM = """
@@ -400,6 +433,7 @@ async def car_generate(update: Update, user_id: int, s: dict) -> None:
         "trigger_label":  trigger_label,
     })
     await save_agent_session(user_id, _CAR_KEY, s)
+    await _save_car_snapshot(user_id, s)  # persist across session clears
 
     try:
         await save_result(
@@ -533,6 +567,7 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
     s["last_result"] = new_result
     s["completed_actions"] = list(_car_completed)
     await save_agent_session(user_id, _CAR_KEY, s)
+    await _save_car_snapshot(user_id, s)  # persist across session clears
 
     try:
         fmt_label    = s.get("fmt_label", "")

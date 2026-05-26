@@ -76,23 +76,62 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # ── BUG #2 / #4 FIX: centralized stale-callback guards ───────────────────────
 
 async def _rs_stale_guard(user_id: int, query) -> bool:
-    """Returns True if the reels callback is stale (session absent or no result)."""
-    from db import get_agent_session as _g
+    """Returns True if the reels callback is truly stale (no session AND no snapshot).
+    If session is missing but snapshot exists — restores it silently and returns False.
+    """
+    from db import get_agent_session as _g, save_agent_session as _sa
     s = await _g(user_id, _RS_KEY)
-    if not s or not s.get("last_result"):
-        await query.answer("⚠️ Эта кнопка устарела. Начни новую тему.", show_alert=True)
-        return True
-    return False
+    if s and s.get("last_result"):
+        return False
+
+    # Session cleared — try snapshot
+    from flows.reels import _load_rs_snapshot, _RS_KEY as _RK
+    snapshot = await _load_rs_snapshot(user_id)
+    if snapshot and snapshot.get("last_result"):
+        restored = {
+            "step":              "done",
+            "last_result":       snapshot["last_result"],
+            "headlines":         snapshot["last_result"],
+            "topic":             snapshot.get("topic", ""),
+            "style":             snapshot.get("style", ""),
+            "completed_actions": snapshot.get("completed_actions", []),
+        }
+        await _sa(user_id, _RK, restored)
+        return False  # guard passes — session restored
+
+    await query.answer("⚠️ Нет сохранённых хуков для правки. Начни новую тему.", show_alert=True)
+    return True
 
 
 async def _car_stale_guard(user_id: int, query) -> bool:
-    """Returns True if the carousel callback is stale (session absent or no result)."""
-    from db import get_agent_session as _g
+    """Returns True if the carousel callback is truly stale (no session AND no snapshot).
+    If session is missing but snapshot exists — restores it silently and returns False.
+    """
+    from db import get_agent_session as _g, save_agent_session as _sa
     s = await _g(user_id, _CAR_KEY)
-    if not s or not s.get("last_result"):
-        await query.answer("⚠️ Эта кнопка устарела. Начни новую карусель.", show_alert=True)
-        return True
-    return False
+    if s and s.get("last_result"):
+        return False
+
+    # Session cleared (e.g. user started a new carousel) — try snapshot
+    from flows.carousel import _load_car_snapshot, _CAR_KEY as _CK
+    snapshot = await _load_car_snapshot(user_id)
+    if snapshot and snapshot.get("last_result"):
+        # Restore session from snapshot so the edit can proceed
+        restored = {
+            "step":             "done",
+            "last_result":      snapshot["last_result"],
+            "headline":         snapshot.get("headline", ""),
+            "fmt_label":        snapshot.get("fmt_label", ""),
+            "trigger_label":    snapshot.get("trigger_label", ""),
+            "fmt":              snapshot.get("fmt", ""),
+            "trigger":          snapshot.get("trigger", ""),
+            "completed_actions": snapshot.get("completed_actions", []),
+        }
+        await _sa(user_id, _CK, restored)
+        return False  # guard passes — session restored
+
+    await query.answer("⚠️ Нет сохранённой карусели для правки. Создай новую.", show_alert=True)
+    return True
 
 
 async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:

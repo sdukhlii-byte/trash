@@ -24,7 +24,7 @@ from telegram import Update
 
 from db import (
     get_agent_session, save_agent_session, clear_agent_session,
-    get_profile, save_result,
+    get_profile, save_result, kv_set, kv_get,
 )
 from llm import complete
 from security import protect
@@ -38,7 +38,36 @@ logger = logging.getLogger(__name__)
 
 
 
-_RS_KEY = "reels_short_flow"
+_RS_KEY           = "reels_short_flow"
+_RS_SNAPSHOT_TTL  = 7 * 24 * 3600  # 7 дней
+
+
+async def _save_rs_snapshot(user_id: int, s: dict) -> None:
+    """Сохраняет последний результат хуков в KV независимо от активной сессии."""
+    import json as _json
+    try:
+        snapshot = {
+            "last_result": s.get("last_result", s.get("headlines", "")),
+            "topic":       s.get("topic", ""),
+            "style":       s.get("style", ""),
+            "completed_actions": s.get("completed_actions", []),
+        }
+        await kv_set(user_id, "__rs_snapshot__", _json.dumps(snapshot, ensure_ascii=False),
+                     ttl=_RS_SNAPSHOT_TTL)
+    except Exception:
+        pass
+
+
+async def _load_rs_snapshot(user_id: int) -> dict | None:
+    """Восстанавливает последний результат хуков из KV."""
+    import json as _json
+    try:
+        raw = await kv_get(user_id, "__rs_snapshot__")
+        if raw:
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return None
 
 # ── Авто-выбор стиля хуков под профиль ───────────────────────────────────────
 
@@ -237,6 +266,7 @@ async def rs_gen(update: Update, user_id: int, topic: str) -> None:
         "last_result":    headlines,
     })
     await save_agent_session(user_id, _RS_KEY, s)
+    await _save_rs_snapshot(user_id, s)  # persist across session clears
 
     try:
         await save_result(user_id, "reels_short", "Хуки для рилса",
@@ -363,6 +393,7 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
     s["last_result"] = new_result
     s["completed_actions"] = list(_rs_completed)
     await save_agent_session(user_id, _RS_KEY, s)
+    await _save_rs_snapshot(user_id, s)  # persist across session clears
 
     try:
         await save_result(user_id, "reels_short", "Хуки для рилса (правка)",
