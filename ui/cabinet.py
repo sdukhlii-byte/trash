@@ -47,7 +47,7 @@ async def show_cabinet(update: Update, user_id: int) -> None:
         f"Ниша: {profile_val(p, 'niche')}\n"
         f"Аудитория: {profile_val(p, 'audience')}\n"
         f"Тон: {profile_val(p, 'tone')}\n"
-        f"Постов в стиле: {ex_count}/10"
+        f"Примеры стиля: {ex_count}/10"
     )
 
     rows = []
@@ -63,7 +63,7 @@ async def show_cabinet(update: Update, user_id: int) -> None:
         rows.append(["🔄 Возобновить подписку|sub_pay"])
 
     rows += [
-        ["✏️ Изменить профиль|profile_edit",  "✨ Мой стиль|style_menu"],
+        ["✏️ Изменить профиль|profile_edit",  "📝 Стиль|style_menu"],
         ["🧾 История платежей|cab_history",
          "👥 Реферал|cab_referral" if state_obj != UserState.SUBSCRIBED else "📊 Прогресс|show_stats"],
         ["🤖 Сменить модель|profile_model"],

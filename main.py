@@ -28,7 +28,7 @@ from config import (
 from handlers.commands import (
     cmd_start, cmd_menu, cmd_clear, cmd_reset, cmd_subscribe, cmd_support, cmd_admin,
 )
-from handlers.messages import handle_text, handle_voice, handle_photo, handle_document
+from handlers.messages import handle_text, handle_voice, handle_photo
 from handlers.callbacks import callback
 
 logging.basicConfig(
@@ -67,7 +67,6 @@ def build_app() -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE,                   handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
-    app.add_handler(MessageHandler(filters.Document.IMAGE,          handle_document))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(callback))
@@ -192,10 +191,6 @@ async def main() -> None:
     # 4. Строим PTB приложение
     ptb_app = build_app()
 
-    # Сохраняем глобальную ссылку для модулей без доступа к ctx
-    from bot_context import set_app
-    set_app(ptb_app)
-
     await ptb_app.initialize()
     await ptb_app.start()
     await _set_bot_commands(ptb_app.bot)
@@ -216,15 +211,6 @@ async def main() -> None:
         logger.info(f"Restored {len(daily_users)} daily jobs")
     except Exception as e:
         logger.error(f"Daily job restore failed: {e}")
-
-    # ── Daily Push (утренние пуши в стиле Persona) ────────────────────────────
-    try:
-        from flows.daily_push import setup_daily_push_jobs, restore_daily_push_jobs
-        setup_daily_push_jobs(ptb_app)
-        await restore_daily_push_jobs(ptb_app)
-        logger.info("Daily push jobs initialized")
-    except Exception as e:
-        logger.warning(f"Daily push setup failed: {e}")
 
     # 6. Retention push — запускаем фоновый job
     try:
@@ -251,27 +237,51 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"Hourly conversion job failed: {e}")
 
-    # 6c. Batch pre-generation дайджестов — делается в setup_daily_push_jobs() выше.
-    # Удалён дублирующий блок: daily_push.py::setup_daily_push_jobs уже регистрирует
-    # _batch_pregen_job в 06:00 UTC. Два параллельных задания = двойные расходы.
-
-    # Follow-up jobs — Redis TTL-флаги (переживают рестарты Railway/деплои)
-    # schedule_followup() пишет флаг при save_result()
-    # run_check_followups() каждые 30 мин сканирует созревшие флаги и отправляет
+    # 6c. Batch pre-generation дайджестов в 06:00 UTC
+    # Генерирует дайджест для всех подписчиков у которых включён daily
+    # До того как они просыпаются — к моменту доставки уже готово из кэша
     try:
-        async def _run_followup_check(ctx):
-            from flows.followup import run_check_followups
-            await run_check_followups(ctx.bot)
+        import datetime as _dt
 
-        ptb_app.job_queue.run_repeating(
-            callback=_run_followup_check,
-            interval=1800,   # 30 минут
-            first=120,       # первый запуск через 2 мин после старта
-            name="followup_check",
+        async def _batch_pregen_digests(ctx) -> None:
+            from db import _get_pool, kv_get
+            from flows.misc import pregen_digest
+            import asyncio as _aio
+            logger.info("[daily batch] starting pre-generation")
+            pool = _get_pool()
+            try:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT DISTINCT user_id FROM daily_settings WHERE enabled=true"
+                    )
+                user_ids = [r["user_id"] for r in rows]
+            except Exception as e:
+                logger.error(f"[daily batch] fetch users failed: {e}")
+                return
+
+            # Генерируем по 5 параллельно — не перегружаем семафор
+            sem = _aio.Semaphore(5)
+            async def _pregen_one(uid: int):
+                async with sem:
+                    await pregen_digest(uid)
+                    await _aio.sleep(0.5)  # мягкий rate-limit
+
+            await _aio.gather(*[_pregen_one(uid) for uid in user_ids],
+                              return_exceptions=True)
+            logger.info(f"[daily batch] pre-generated {len(user_ids)} digests")
+
+        ptb_app.job_queue.run_daily(
+            callback=_batch_pregen_digests,
+            time=_dt.time(hour=6, minute=0, tzinfo=_dt.timezone.utc),
+            name="daily_digest_batch",
         )
-        logger.info("Follow-up check job scheduled (every 30 min)")
+        logger.info("Daily digest batch job scheduled at 06:00 UTC")
     except Exception as e:
-        logger.warning(f"Follow-up check job failed: {e}")
+        logger.warning(f"Daily digest batch job failed: {e}")
+
+    # Follow-up jobs — не восстанавливаем при рестарте (TTL 72h, Railway перезапускается редко)
+    # Новые followup планируются при каждом save_result() через ptb_app
+    logger.info("Follow-up system ready (scheduled per-generation)")
 
     # 7. Webhook или polling
     port = int(os.environ.get("PORT", 8080))

@@ -243,10 +243,10 @@ async def _auto_pick(topic: str, profile: dict) -> dict:
 
 # ── Основной флоу ─────────────────────────────────────────────────────────────
 
-async def car_start(update: Update, user_id: int, urgency: bool = False) -> None:
+async def car_start(update: Update, user_id: int) -> None:
     """Шаг 1: запрашиваем тему."""
     await clear_agent_session(user_id, _CAR_KEY)
-    await save_agent_session(user_id, _CAR_KEY, {"step": "await_topic", "urgency": urgency})
+    await save_agent_session(user_id, _CAR_KEY, {"step": "await_topic"})
     await send(
         update,
         "🎠 *Карусель*\n\nНапиши тему одним предложением:\n\n"
@@ -265,22 +265,6 @@ async def car_topic_received(update: Update, user_id: int, topic: str, s: dict) 
     status  = await update.effective_chat.send_message(random.choice(_THINKING_MSGS))
 
     picked = await _auto_pick(topic, profile)
-
-    # Urgency bypass: пропускаем интервью, сразу к генерации
-    if s.get("urgency"):
-        s.update({
-            "step": "generating",
-            "topic": topic,
-            "fmt": picked["format"],
-            "trigger": picked["trigger"],
-            "headline": picked["headline"],
-            "interview_history": [],
-            "q_count": 0,
-        })
-        await safe_delete(status)
-        await save_agent_session(user_id, _CAR_KEY, s)
-        await car_generate(update, user_id, s)
-        return
 
     # Первый вопрос интервью
     ctx = (
@@ -333,14 +317,6 @@ async def car_interview_step(update: Update, user_id: int, text: str, s: dict) -
     ih = s.get("interview_history", [])
     ih.append({"role": "user", "content": text})
     q_count = s.get("q_count", 1)
-
-    # Urgency bypass: пропускаем оставшиеся вопросы
-    if s.get("urgency"):
-        ih.append({"role": "assistant", "content": "[READY]"})
-        s["interview_history"] = ih
-        await save_agent_session(user_id, _CAR_KEY, s)
-        await car_generate(update, user_id, s)
-        return
 
     # После 2 вопросов — сразу генерируем
     if q_count >= 2:

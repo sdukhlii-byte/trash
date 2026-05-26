@@ -1,12 +1,5 @@
 """
-handlers/messages.py — текст, голос, фото, документы-изображения.
-
-Изменения v2:
-- handle_photo: распознаёт режим collecting_posts (обучение голосу через скрины)
-- handle_document: обрабатывает изображения присланные как файл
-- extract_text_from_image: OCR через GPT-4o (vision_describe)
-- handle_post_collection: накопление постов для обучения голосу (до 10 штук)
-- finalize_voice_learning: запуск анализа после набора нужного количества
+handlers/messages.py — текст, голос, фото.
 """
 import asyncio
 import base64
@@ -44,7 +37,6 @@ from config import CHAT_SYSTEM, MODELS
 import agents as ag
 from security import ADMIN_ID
 from voice_learner import handle_voice_note_text
-from voice_normalizer import normalize_voice
 
 logger = logging.getLogger(__name__)
 
@@ -158,39 +150,20 @@ async def _react_to_message(update: Update, text: str) -> None:
 
 # ── Voice handler ──────────────────────────────────────────────────────────────
 
-# Живые статусы в стиле Миры (фаза 1.2)
-import random as _random
-_VOICE_STATUS_MESSAGES = [
-    "Слышу тебя — уже думаю над этим...",
-    "Слушаю и разбираюсь...",
-    "Минуту, структурирую что тут...",
-    "Слышу — сейчас разберу...",
-]
-
-
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Voice-first handler: транскрипция → нормализация → прямой routing.
-
-    Изменения по анализу:
-    - Убрано подтверждение «Отправить как запрос?» (фаза 1.1)
-    - Живые статусные сообщения в стиле Миры (фаза 1.2)
-    - VoiceNormalizer между Whisper и classify_intent (фаза 1.3)
-    - Транскрипция не показывается пользователю, сохраняется в metadata
-    """
     user_id = update.effective_user.id
     state = await get_user_state(user_id)
     if not has_access(state):
         await show_paywall(update, user_id, state)
         return
 
-    # Per-user lock — предотвращает гонку voice+text
+    # BUG #6 FIX: acquire per-user lock to prevent concurrent voice+text race
     lock = await _get_user_lock(user_id)
     if lock.locked():
         logger.info(f"[voice dedup] user={user_id} — запрос уже в обработке")
         return
     async with lock:
-        # Мгновенная реакция 👀 — показывает что услышала
+        # Мгновенная реакция на голосовое — показывает что услышала
         try:
             from ui.media import set_reaction
             msg = update.message
@@ -200,225 +173,34 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception:
             pass
 
-        # Живой статус — не «Слушаю... 🎙», а в стиле Миры
-        status_text = _random.choice(_VOICE_STATUS_MESSAGES)
-        status = await update.message.reply_text(status_text)
-
+        status = await update.message.reply_text("Слушаю... 🎙")
         try:
             file     = await update.message.voice.get_file()
             ogg_data = await file.download_as_bytearray()
-            raw_text = await transcribe(bytes(ogg_data))
+            text     = await transcribe(bytes(ogg_data))
         except Exception as e:
             logger.error(f"Whisper failed: {e}")
             await safe_delete(status)
             await send(update, "Голосовые сообщения пока недоступны. Напиши текстом 🙏")
             return
 
-        if not raw_text or not raw_text.strip():
-            await safe_delete(status)
+        await safe_delete(status)
+
+        if not text or not text.strip():
             await send(update, "Не расслышала — попробуй ещё раз.")
             return
 
-        raw_clean = raw_text.strip()
-
-        # VoiceNormalizer: структурируем транскрипцию перед routing'ом
-        voice_ctx = await normalize_voice(raw_clean)
-        normalized = voice_ctx.get("normalized_request") or raw_clean
-
-        # Сохраняем транскрипцию в metadata (не показываем пользователю)
-        await kv_set(user_id, "__voice_raw__", raw_clean, ttl=3600)
-        await kv_set(user_id, "__voice_ctx__", __import__("json").dumps(
-            voice_ctx, ensure_ascii=False), ttl=3600)
-
-        # Обновляем мета-профиль голоса (накапливаем паттерны речи, фаза 4.1)
-        try:
-            from voice_learner import update_voice_meta_profile
-            asyncio.create_task(update_voice_meta_profile(user_id, voice_ctx))
-        except Exception:
-            pass
-
-        await safe_delete(status)
-
-        # Прямой routing — как для текстового сообщения
-        await _route(update, ctx, user_id, normalized)
-
-
-# ── Image OCR helpers ─────────────────────────────────────────────────────────
-
-_POST_COLLECTION_KEY = "__collecting_posts__"
-
-async def extract_text_from_image(b64: str) -> str:
-    """
-    Извлекает текст с изображения через GPT-4o (vision_describe).
-    Используется для OCR скриншотов постов при обучении голосу.
-    """
-    from config import IMAGE_OCR_PROMPT
-    try:
-        result = await vision_describe(
-            [(b64, "image/jpeg")],
-            question=IMAGE_OCR_PROMPT,
-            model_key="gpt4",
-        )
-        return result.strip()
-    except Exception as e:
-        logger.error(f"extract_text_from_image error: {e}")
-        return ""
-
-
-async def _download_photo_as_base64(update: Update) -> str | None:
-    """Скачивает фото из сообщения и возвращает base64."""
-    try:
-        photo = update.message.photo[-1]
-        file = await photo.get_file()
-        content = await file.download_as_bytearray()
-        return base64.b64encode(content).decode()
-    except Exception as e:
-        logger.error(f"_download_photo_as_base64 error: {e}")
-        return None
-
-
-async def handle_post_collection(update: Update, user_id: int, session: dict) -> None:
-    """
-    Обрабатывает одно фото/текст в режиме сбора постов для обучения голосу.
-    Накапливает до target_count единиц, затем запускает анализ.
-    """
-    collected: list = session.get("collected", [])
-    target = session.get("target_count", 10)
-
-    if update.message.photo:
-        b64 = await _download_photo_as_base64(update)
-        if b64:
-            collected.append({"type": "image", "b64": b64})
-    elif update.message.text:
-        text = (update.message.text or "").strip()
-        if text and text.lower() not in ("всё", "все", "готово", "стоп", "хватит"):
-            collected.append({"type": "text", "content": text})
-
-    count = len(collected)
-    session["collected"] = collected
-
-    # Команда завершения или набрали нужное количество
-    finish_words = ("всё", "все", "готово", "стоп", "хватит")
-    user_text = (update.message.text or "").strip().lower()
-    if count >= target or (update.message.text and user_text in finish_words):
-        await kv_del(user_id, _POST_COLLECTION_KEY)
-        await update.message.reply_text(
-            f"✅ Собрала {count} постов — анализирую твой голос... Это займёт минуту 🔍"
-        )
-        asyncio.create_task(finalize_voice_learning(collected, user_id, update))
-    else:
-        await kv_set(user_id, _POST_COLLECTION_KEY,
-                     json.dumps(session, ensure_ascii=False), ttl=3600)
-        remaining = target - count
-        await update.message.reply_text(
-            f"✅ {count}/{target} — давай ещё!\n"
-            f"_Осталось примерно {remaining}. Или напиши «Готово» чтобы завершить._",
+        clean = text.strip()
+        await kv_set(user_id, "__voice_pending__", clean, ttl=3600)
+        await send(
+            update,
+            f"🎙 _Расшифровала:_\n\n{clean}\n\nОтправить как запрос?",
             parse_mode="Markdown",
-        )
-
-
-async def finalize_voice_learning(collected: list, user_id: int, update: Update) -> None:
-    """
-    Извлекает текст из скриншотов, передаёт в voice_learner для анализа голоса.
-    Сохраняет результаты в voice_signals в PostgreSQL.
-    """
-    texts = []
-    for item in collected:
-        if item.get("type") == "image":
-            b64 = item.get("b64", "")
-            if b64:
-                extracted = await extract_text_from_image(b64)
-                if extracted:
-                    texts.append(extracted)
-        elif item.get("type") == "text":
-            content = item.get("content", "").strip()
-            if content:
-                texts.append(content)
-
-    if not texts:
-        await update.message.reply_text(
-            "Не смогла прочитать тексты с изображений 😔 Попробуй прислать их текстом."
-        )
-        return
-
-    combined = "\n\n---\n\n".join(texts)
-
-    try:
-        from voice_learner import handle_voice_note_learning
-        await handle_voice_note_learning(update, user_id, combined)
-    except Exception as e:
-        logger.error(f"finalize_voice_learning error: {e}")
-        await update.message.reply_text(
-            "Посты собрала, но что-то пошло не так при анализе. Попробуй ещё раз 🔁"
+            reply_markup=kb(["✅ Отправить|voice_send"], ["❌ Отмена|voice_cancel"]),
         )
 
 
 # ── Photo handler ──────────────────────────────────────────────────────────────
-
-async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Обрабатывает документы-изображения (когда пользователь шлёт фото как файл).
-    Поддерживаемые MIME: image/jpeg, image/png, image/webp, image/gif.
-    """
-    user_id = update.effective_user.id
-    doc = update.message.document
-    if not doc:
-        return
-
-    mime = doc.mime_type or ""
-    if not mime.startswith("image/"):
-        # Не изображение — игнорируем (или можно добавить другую обработку)
-        await update.message.reply_text(
-            "Я умею читать только изображения. Пришли файл в формате JPG, PNG или WebP 🖼"
-        )
-        return
-
-    state = await get_user_state(user_id)
-    if not has_access(state):
-        await show_paywall(update, user_id, state)
-        return
-
-    lock = await _get_user_lock(user_id)
-    if lock.locked():
-        return
-    async with lock:
-        # Режим сбора постов?
-        raw_session = await kv_get(user_id, _POST_COLLECTION_KEY)
-        if raw_session:
-            session = json.loads(raw_session)
-            try:
-                file = await doc.get_file()
-                content = await file.download_as_bytearray()
-                b64 = base64.b64encode(content).decode()
-                session["collected"].append({"type": "image", "b64": b64})
-            except Exception as e:
-                logger.error(f"handle_document download error: {e}")
-            await handle_post_collection(update, user_id, session)
-            return
-
-        # Универсальный анализ
-        caption = (update.message.caption or "").strip()
-        try:
-            file = await doc.get_file()
-            content = await file.download_as_bytearray()
-            b64 = base64.b64encode(content).decode()
-        except Exception as e:
-            logger.error(f"handle_document get_file error: {e}")
-            await send(update, "Не смогла открыть файл — попробуй ещё раз 🔁")
-            return
-
-        status = await update.effective_chat.send_message("Смотрю на изображение...")
-        try:
-            result = await vision_describe([(b64, mime)], question=caption)
-        except Exception as e:
-            logger.error(f"handle_document vision error: {e}")
-            await safe_delete(status)
-            await send(update, "Изображение не открылось — попробуй ещё раз 🔁",
-                       reply_markup=main_menu_kb())
-            return
-        await safe_delete(status)
-        await send(update, f"🖼 {result}", reply_markup=kb(["← Меню|menu_main"]))
-
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -433,13 +215,6 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"[photo dedup] user={user_id} — запрос уже в обработке")
         return
     async with lock:
-        # ── Режим сбора постов для обучения голосу ────────────────────────
-        raw_session = await kv_get(user_id, _POST_COLLECTION_KEY)
-        if raw_session:
-            session = json.loads(raw_session)
-            await handle_post_collection(update, user_id, session)
-            return
-
         caption = (update.message.caption or "").strip()
 
         # Активный generic агент
@@ -481,21 +256,6 @@ async def _handle_photo_universal(update: Update, user_id: int, caption: str) ->
         await safe_delete(status)
         await send(update, "Фото не открылось — попробуй ещё раз 🔁", reply_markup=main_menu_kb())
         return
-
-    # Классифицируем контекст скриншота и сохраняем для агентов
-    try:
-        from intent_router import classify_image_intent
-        img_intent = await classify_image_intent(result)
-        await kv_set(user_id, "__image_context__", json.dumps({
-            "intent":         img_intent.intent,
-            "agent":          img_intent.agent,
-            "confidence":     img_intent.confidence,
-            "extracted_text": result,
-        }, ensure_ascii=False), ttl=3600)
-        logger.info(f"[image_intent] user={user_id} intent={img_intent.intent} conf={img_intent.confidence:.2f}")
-    except Exception as e:
-        logger.debug(f"classify_image_intent skipped: {e}")
-
     await safe_delete(status)
     await send(update, f"🖼 {result}", reply_markup=kb(["← Меню|menu_main"]))
 
@@ -662,38 +422,6 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                        parse_mode="Markdown")
         return
 
-    # 2a2. Daily Push — установка времени
-    push_time_s = await get_agent_session(user_id, "daily_push_time_flow")
-    if push_time_s and push_time_s.get("step") == "await_time":
-        import re as _re
-        m = _re.match(r"(\d{1,2}):(\d{2})", text.strip())
-        if m:
-            hour_local = int(m.group(1))
-            minute = int(m.group(2))
-            tz_offset = 2  # UTC+2 (ES/HR/RS по умолчанию)
-            hour_utc = (hour_local - tz_offset) % 24
-            from flows.daily_push import get_push_settings, save_push_settings, schedule_daily_push
-            from db import clear_agent_session as _cas
-            s = await get_push_settings(user_id)
-            s.update({"hour": hour_utc, "minute": minute, "hour_local": hour_local})
-            await save_push_settings(user_id, s)
-            await _cas(user_id, "daily_push_time_flow")
-            if s.get("enabled"):
-                try:
-                    await schedule_daily_push(ctx.application, user_id, hour_utc, minute)
-                except Exception as e:
-                    logger.warning(f"reschedule daily push failed: {e}")
-            await send(
-                update,
-                f"✅ Время пушей обновлено: *{hour_local:02d}:{minute:02d}*",
-                parse_mode="Markdown",
-                reply_markup=kb(["☀️ Пуши|daily_push_menu", "← Меню|menu_main"]),
-            )
-        else:
-            await send(update, "Не понял формат. Напиши например: `9:00` или `08:30`",
-                       parse_mode="Markdown")
-        return
-
     # 2b. Планировщик
     planner_s = await get_agent_session(user_id, _PLANNER_KEY)
     if planner_s and await route_planner_text(update, user_id, text, planner_s):
@@ -779,19 +507,12 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     profile = await get_profile(user_id)
     intent  = await classify_intent(text, profile)
-    logger.info(f"[intent] user={user_id} agent={intent.agent} conf={intent.confidence:.2f} urgency={intent.urgency}")
+    logger.info(f"[intent] user={user_id} agent={intent.agent} conf={intent.confidence:.2f}")
 
     if intent.confidence >= CONFIDENCE_THRESHOLD and intent.agent != "chat":
         await kv_set(user_id, "__intent_ctx__", json.dumps({
             "agent": intent.agent, "text": text, "topic": intent.topic,
-            "urgency": intent.urgency,
         }, ensure_ascii=False))
-
-        # Urgency — пользователь хочет результат немедленно, без интервью
-        if intent.urgency and intent.agent in _ONESHOT_PROMPTS:
-            result = await oneshot_generate(intent.agent, text, profile=profile)
-            await send(update, result, parse_mode="Markdown")
-            return
 
         main_cb = (
             "flow_reels_short" if intent.agent == "reels_short" else
@@ -809,14 +530,14 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             elif intent.agent == "carousel":
                 from db import clear_all_agent_sessions
                 await clear_all_agent_sessions(user_id)
-                await carousel.car_start(update, user_id, urgency=intent.urgency)
+                await carousel.car_start(update, user_id)
                 return
             else:
                 spec = ag.get_spec(intent.agent)
                 if spec:
                     from db import clear_all_agent_sessions
                     await clear_all_agent_sessions(user_id)
-                    await ag.start(update, user_id, spec, urgency=intent.urgency)
+                    await ag.start(update, user_id, spec)
                     return
 
         emoji_main = AGENT_EMOJI.get(intent.agent, "🤖")
@@ -840,10 +561,9 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         rows.append(["☰ Меню|menu_main"])
 
         topic_display = intent.topic or text[:60]
-        # Voice-first формулировка (не «Выбери инструмент», а разговорная)
         await send(
             update,
-            f"Слышу — *«{topic_display}»*\n\nХочешь именно это?",
+            f"Понял — *«{topic_display}»*\n\nВыбери инструмент:",
             parse_mode="Markdown",
             reply_markup=kb(*rows),
         )
