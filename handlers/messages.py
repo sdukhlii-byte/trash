@@ -442,6 +442,34 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
         caption = (update.message.caption or "").strip()
 
+        # ── Активные текстовые флоу — извлекаем OCR и передаём как текст ──
+        # Диагностика контента
+        diag_s = await get_agent_session(user_id, _DIAG_KEY)
+        style_s = await get_agent_session(user_id, _STYLE_KEY)
+        refine_s = await get_agent_session(user_id, _REFINE_KEY)
+        if diag_s or (style_s and style_s.get("step") == "await_example") or \
+                (refine_s and refine_s.get("step") == "await_instruction"):
+            # Скачиваем фото и делаем OCR
+            b64 = await _download_photo_as_base64(update)
+            if b64:
+                status = await update.effective_chat.send_message("Читаю текст с картинки...")
+                ocr_text = await extract_text_from_image(b64)
+                await status.delete()
+                if ocr_text:
+                    if diag_s:
+                        await route_diagnostic_text(update, user_id, ocr_text, diag_s)
+                    elif style_s:
+                        from flows.misc import style_save_example
+                        await style_save_example(update, user_id, ocr_text)
+                    elif refine_s:
+                        from flows.misc import refine_do
+                        await refine_do(update, user_id, ocr_text, refine_s)
+                else:
+                    await send(update, "Не смогла прочитать текст с картинки — пришли текстом 🙏")
+            else:
+                await send(update, "Не смогла открыть картинку — попробуй ещё раз 🔁")
+            return
+
         # Активный generic агент
         agent_key = await _detect_active_agent(user_id)
         spec = ag.get_spec(agent_key) if agent_key else None
