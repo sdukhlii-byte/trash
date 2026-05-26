@@ -161,7 +161,7 @@ async def show_home(update: Update, user_id: int) -> None:
             update,
             "\n".join(lines),
             parse_mode="Markdown",
-            reply_markup=_home_kb(total, voice_sig),
+            reply_markup=await _home_kb(user_id, total, voice_sig),
         )
 
         if streak == 7:
@@ -174,14 +174,73 @@ async def show_home(update: Update, user_id: int) -> None:
         await _sm(update, user_id)
 
 
-def _home_kb(total: int, voice_signals: int):
+# Маппинг agent_key → (emoji + label, callback_data)
+# Только инструменты которые имеет смысл показывать в главном меню
+_AGENT_MENU_ITEMS = {
+    "carousel":     ("🎠 Карусель",      "flow_carousel"),
+    "stories":      ("📸 Сторис",        "agent_start_stories"),
+    "warmup":       ("🔥 Прогрев",       "agent_start_warmup"),
+    "talking_head": ("🎙 Talking Head",   "agent_start_talking_head"),
+    "tg_plan":      ("📅 Контент-план",  "agent_start_tg_plan"),
+    "reels_adapt":  ("🔄 Адаптация",     "agent_start_reels_adapt"),
+    "cartoon":      ("🎭 Анимация",      "agent_start_cartoon"),
+    "profile":      ("🔍 Разбор профиля","agent_start_profile"),
+    "competitor":   ("🔎 Разбор конкур.","agent_start_competitor"),
+}
+
+# Дефолтные слоты — когда affinity данных ещё нет
+_DEFAULT_SLOT_1 = ("🎠 Карусель",  "flow_carousel")
+_DEFAULT_SLOT_2 = ("📸 Сторис",    "agent_start_stories")
+
+# Порог affinity для попадания в главное меню
+_AFFINITY_THRESHOLD = 0.65
+
+
+async def _get_adaptive_slots(user_id: int) -> tuple:
+    """
+    Возвращает два слота для главного меню на основе content_format_affinity.
+    Пост и Рилс зафиксированы — варьируются только слоты 3 и 4.
+    Если данных недостаточно — возвращает дефолт (Карусель, Сторис).
+    """
+    try:
+        from db import get_cip
+        cip = await get_cip(user_id)
+        affinity = cip.get("content_format_affinity", {})
+
+        # Исключаем post и reels_short — они зафиксированы в строке выше
+        # Берём агентов с affinity выше порога, сортируем по убыванию
+        candidates = [
+            (key, score) for key, score in affinity.items()
+            if key not in ("post", "reels_short")
+            and key in _AGENT_MENU_ITEMS
+            and score >= _AFFINITY_THRESHOLD
+        ]
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        if len(candidates) >= 2:
+            slot1 = _AGENT_MENU_ITEMS[candidates[0][0]]
+            slot2 = _AGENT_MENU_ITEMS[candidates[1][0]]
+            return slot1, slot2
+        elif len(candidates) == 1:
+            slot1 = _AGENT_MENU_ITEMS[candidates[0][0]]
+            # Второй слот — дефолт если не совпадает с первым
+            slot2 = _DEFAULT_SLOT_2 if slot1 != _DEFAULT_SLOT_1 else _DEFAULT_SLOT_1
+            return slot1, slot2
+    except Exception:
+        pass
+
+    return _DEFAULT_SLOT_1, _DEFAULT_SLOT_2
+
+
+async def _home_kb(user_id: int, total: int, voice_signals: int):
+    slot1, slot2 = await _get_adaptive_slots(user_id)
+
     rows = [
         ["🎙 Говори голосом — пойму и сделаю|voice_hint"],
-        ["✍️ Пост|agent_start_post",        "🎬 Рилс + хуки|flow_reels_short"],
-        ["🎠 Карусель|flow_carousel",        "📸 Сторис|agent_start_stories"],
+        ["✍️ Пост|agent_start_post",   "🎬 Рилс + хуки|flow_reels_short"],
+        [f"{slot1[0]}|{slot1[1]}",     f"{slot2[0]}|{slot2[1]}"],
         ["🩺 Что буксует в контенте?|diagnostic_start"],
         ["🧩 Все инструменты|menu_more"],
-        # Мой стиль — постоянно на виду, это основная настройка продукта
         ["✨ Мой стиль|style_menu", "📚 Материалы|my_results", "👤 Кабинет|sub_cabinet"],
     ]
     return kb(*rows)
