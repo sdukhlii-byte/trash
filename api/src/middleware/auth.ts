@@ -3,6 +3,7 @@ import { FastifyRequest, FastifyReply } from 'fastify'
 import crypto from 'crypto'
 import { prisma } from '../db/prisma'
 import { cache } from '../db/redis'
+import { logger } from '../utils/logger'
 import type { AuthTokenPayload } from '../types'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!
@@ -10,37 +11,55 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!
 // ── Telegram initData verification ───────────────────────────────────────────
 
 export function verifyTelegramInitData(initData: string): Record<string, string> | null {
-  const params = new URLSearchParams(initData)
-  const hash = params.get('hash')
-  if (!hash) return null
+  try {
+    const params = new URLSearchParams(initData)
+    const hash = params.get('hash')
+    if (!hash) {
+      logger.warn('verifyTelegramInitData: no hash in initData')
+      return null
+    }
 
-  params.delete('hash')
+    params.delete('hash')
 
-  // Sort params and build check string
-  const checkString = Array.from(params.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${v}`)
-    .join('\n')
+    // Sort params and build check string
+    const checkString = Array.from(params.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n')
 
-  const secretKey = crypto
-    .createHmac('sha256', 'WebAppData')
-    .update(BOT_TOKEN)
-    .digest()
+    const secretKey = crypto
+      .createHmac('sha256', 'WebAppData')
+      .update(BOT_TOKEN)
+      .digest()
 
-  const expectedHash = crypto
-    .createHmac('sha256', secretKey)
-    .update(checkString)
-    .digest('hex')
+    const expectedHash = crypto
+      .createHmac('sha256', secretKey)
+      .update(checkString)
+      .digest('hex')
 
-  if (expectedHash !== hash) return null
+    if (expectedHash !== hash) {
+      logger.warn({
+        expected: expectedHash,
+        got: hash,
+      }, 'verifyTelegramInitData: hash mismatch — check BOT_TOKEN on Render')
+      return null
+    }
 
-  // Check auth_date not older than 24h
-  const authDate = parseInt(params.get('auth_date') ?? '0')
-  if (Date.now() / 1000 - authDate > 86400) return null
+    // Check auth_date not older than 24h (skip in dev mode)
+    const authDate = parseInt(params.get('auth_date') ?? '0')
+    const ageSeconds = Date.now() / 1000 - authDate
+    if (process.env.NODE_ENV === 'production' && ageSeconds > 86400) {
+      logger.warn({ ageSeconds }, 'verifyTelegramInitData: initData expired')
+      return null
+    }
 
-  const result: Record<string, string> = {}
-  params.forEach((v, k) => { result[k] = v })
-  return result
+    const result: Record<string, string> = {}
+    params.forEach((v, k) => { result[k] = v })
+    return result
+  } catch (err) {
+    logger.error({ err }, 'verifyTelegramInitData: unexpected error')
+    return null
+  }
 }
 
 // ── JWT auth middleware ───────────────────────────────────────────────────────

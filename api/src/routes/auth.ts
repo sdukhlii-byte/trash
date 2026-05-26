@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { prisma } from '../db/prisma'
 import { verifyTelegramInitData } from '../middleware/auth'
 import { getUserState } from '../middleware/auth'
+import { logger } from '../utils/logger'
 
 const TelegramAuthSchema = z.object({
   initData: z.string().min(1),
@@ -20,10 +21,25 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   // ── POST /auth/telegram — Mini App auth via initData ─────────────────────
   app.post('/auth/telegram', async (req, reply) => {
-    const { initData } = TelegramAuthSchema.parse(req.body)
+    logger.info({ body: req.body }, 'POST /auth/telegram — received')
+
+    let parsedBody: { initData: string }
+    try {
+      parsedBody = TelegramAuthSchema.parse(req.body)
+    } catch (err) {
+      logger.warn({ body: req.body, err }, 'POST /auth/telegram — invalid body')
+      return reply.code(400).send({
+        ok: false,
+        error: 'Missing or invalid initData field',
+        code: 'VALIDATION_ERROR',
+      })
+    }
+
+    const { initData } = parsedBody
 
     const parsed = verifyTelegramInitData(initData)
     if (!parsed) {
+      logger.warn({ initData: initData.slice(0, 80) }, 'POST /auth/telegram — invalid initData')
       return reply.code(401).send({
         ok: false,
         error: 'Invalid Telegram initData',
@@ -31,7 +47,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       })
     }
 
-    const tgUser = JSON.parse(parsed.user)
+    let tgUser: Record<string, any>
+    try {
+      tgUser = JSON.parse(parsed.user)
+    } catch {
+      logger.error({ parsed }, 'POST /auth/telegram — failed to parse user field')
+      return reply.code(400).send({
+        ok: false,
+        error: 'Malformed user data in initData',
+        code: 'MALFORMED_USER',
+      })
+    }
+
+    logger.info({ telegramId: tgUser.id }, 'POST /auth/telegram — upserting user')
 
     // Upsert user
     const user = await prisma.user.upsert({
@@ -63,6 +91,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       userId:     user.id,
       telegramId: Number(user.telegramId),
     })
+
+    logger.info({ userId: user.id, state }, 'POST /auth/telegram — success')
 
     return reply.send({
       ok: true,

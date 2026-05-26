@@ -10,6 +10,13 @@ export function errorHandler(
 ): void {
   // Zod validation errors
   if (error instanceof ZodError) {
+    logger.warn({
+      url: req.url,
+      method: req.method,
+      body: req.body,
+      issues: error.flatten().fieldErrors,
+    }, 'Validation error (ZodError)')
+
     reply.code(400).send({
       ok: false,
       error: 'Validation error',
@@ -21,6 +28,12 @@ export function errorHandler(
 
   // Fastify validation errors
   if (error.validation) {
+    logger.warn({
+      url: req.url,
+      method: req.method,
+      validation: error.validation,
+    }, 'Validation error (Fastify)')
+
     reply.code(400).send({
       ok: false,
       error: 'Bad request',
@@ -32,6 +45,13 @@ export function errorHandler(
 
   // Known HTTP errors
   if (error.statusCode && error.statusCode < 500) {
+    logger.warn({
+      url: req.url,
+      method: req.method,
+      statusCode: error.statusCode,
+      message: error.message,
+    }, `HTTP ${error.statusCode}: ${error.message}`)
+
     reply.code(error.statusCode).send({
       ok: false,
       error: error.message,
@@ -45,6 +65,7 @@ export function errorHandler(
     err: error,
     url: req.url,
     method: req.method,
+    body: req.body,
     userId: (req.user as any)?.userId,
   }, 'Unhandled error')
 
