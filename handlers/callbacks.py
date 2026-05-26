@@ -922,11 +922,23 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
     if data.startswith("ag_edit_"):
         edit_key_map = {
-            "ag_edit_softer":  "softer",
-            "ag_edit_bolder":  "bolder",
-            "ag_edit_shorter": "shorter",
-            "ag_edit_detail":  "add_detail",
-            "ag_edit_cta":     "stronger_cta",
+            "ag_edit_softer":       "softer",
+            "ag_edit_bolder":       "bolder",
+            "ag_edit_shorter":      "shorter",
+            "ag_edit_detail":       "add_detail",
+            "ag_edit_cta":          "stronger_cta",
+            # Warmup-specific
+            "ag_edit_resonance":    "resonance",
+            "ag_edit_add_proof":    "add_proof",
+            # Stories-specific
+            "ag_edit_mid_hook":     "mid_hook",
+            # Talking head / cartoon
+            "ag_edit_hook":         "hook",
+            # Profile-specific
+            "ag_edit_deepen":       "deepen",
+            # Competitor-specific
+            "ag_edit_tactics":      "tactics",
+            "ag_edit_positioning":  "positioning",
         }
         edit_key = edit_key_map.get(data)
         if edit_key:

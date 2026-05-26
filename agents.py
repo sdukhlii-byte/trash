@@ -71,6 +71,7 @@ _AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
         "shorter":      "Сократи пост до 150 слов: только хук + суть + CTA. Никакой воды.",
         "add_detail":   "Добавь личную историю или конкретный кейс — одним абзацем в середине поста.",
         "stronger_cta": "Перепиши последний абзац: сделай CTA конкретным, с выгодой для читателя.",
+        "hook":         "Перепиши только первые 1-2 строки поста. Новый хук должен бить в другую эмоцию или ситуацию. Остальное не трогай.",
     },
     "warmup": {
         "softer":       "Смягчи тон серии: убери ощущение продажи, добавь заботу и поддержку. ДЕНЬ 1 — сохрани мягкость полностью.",
@@ -78,6 +79,10 @@ _AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
         "shorter":      "Сократи каждый пост серии до 100-150 слов. Оставь только суть и психологическую логику каждого дня.",
         "add_detail":   "Добавь социальное доказательство — историю клиента или кейс — в самый слабый пост серии.",
         "stronger_cta": "Усиль финальный призыв в последнем посте серии (День 3). ДЕНЬ 1 — CTA остаётся мягким.",
+        # Warmup-specific
+        "resonance":    "Усиль эмоциональный резонанс серии — без усиления давления. Добавь больше узнавания, близости, 'это про меня'. ЗАЩИЩЕНО: не меняй интенсивность давления в Дне 1.",
+        "add_proof":    "Добавь конкретное социальное доказательство в День 2 (трансформация). Кейс клиента, цифра, до/после — что-то конкретное что делает результат реальным.",
+        "cta":          "Усиль оффер только в Дне 3. Сделай его конкретнее: что именно получит человек, когда, за что. ДЕНЬ 1 и ДЕНЬ 2 — не трогай.",
     },
     "stories": {
         "softer":       "Перепиши сторис в более живом и неформальном стиле — как разговор с подругой.",
@@ -85,6 +90,8 @@ _AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
         "shorter":      "Сократи каждый слайд до 1-2 предложений. Читается за 2 секунды.",
         "add_detail":   "Добавь один слайд с конкретным фактом или цифрой — в середину цепочки.",
         "stronger_cta": "Усиль последний слайд: конкретный призыв с выгодой.",
+        # Stories-specific
+        "mid_hook":     "Перепиши слайды 5-7 (опасная зона — здесь уходит большинство). Добавь интригующий вопрос, неожиданный поворот или самый острый инсайт в этой точке. Остальные слайды не трогай.",
     },
     "tg_plan": {
         "softer":       "Смягчи формулировки тем: более живые, разговорные заголовки.",
@@ -96,9 +103,36 @@ _AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
     "talking_head": {
         "softer":       "Перепиши сценарий в более личном, разговорном тоне. Как будто говоришь другу.",
         "bolder":       "Сделай сценарий провокационнее: острый вход, прямые утверждения, сильный финал.",
-        "shorter":      "Сократи сценарий до 60 секунд: убери лирику, оставь суть.",
+        "shorter":      "Сократи сценарий до 60 секунд: убери лирику, оставь суть. Обнови хронометраж в производственном брифе.",
         "add_detail":   "Добавь личную историю или конкретный пример в середину сценария.",
         "stronger_cta": "Усиль финальный призыв: конкретный следующий шаг для зрителя.",
+        # Talking head-specific
+        "hook":         "Перепиши только блок ХУК (0:00-0:03). Новый хук должен бить в другую боль или заблуждение аудитории. ЗАЩИЩЕНО: остальные блоки сценария не трогай.",
+    },
+    "cartoon": {
+        "softer":       "Смягчи юмор: менее абсурдно, более узнаваемо и тепло.",
+        "bolder":       "Сделай мультик острее: более неожиданный поворот, более дерзкий финал.",
+        "shorter":      "Сократи до 30 секунд: убери промежуточные сцены, оставь завязку → поворот → финал.",
+        "add_detail":   "Сделай персонажей живее: добавь деталь-характеристику для главного персонажа.",
+        "stronger_cta": "Усиль финальный CTA: конкретнее, под боль аудитории.",
+        "hook":         "Перепиши только хук (0:00-0:03): другая открывающая сцена, другое первое слово. Остальное не трогай.",
+    },
+    "profile": {
+        # Profile refinements are additive, not stylistic
+        "deepen":       "Углуби один раздел — выбери тот который сейчас звучит наиболее обобщённо. Добавь конкретику из интервью. Остальные разделы не трогай.",
+        "shorter":      "Сделай компактную версию: оставь диагностическое предложение, топ-3 проблемы с метками 🔴🟡🟢, и раздел 'Что делать прямо сейчас'. Убери подробные разделы.",
+        "add_detail":   "Добавь к разделу 'Что делать прямо сейчас' один конкретный пример — покажи как именно должно выглядеть исправление.",
+        "stronger_cta": "Перепиши раздел 'Что делать прямо сейчас': каждое действие должно быть настолько конкретным, что его можно выполнить сегодня без вопросов.",
+    },
+    "competitor": {
+        "softer":       "Смягчи формулировки — менее агрессивный тон, сохрани суть анализа.",
+        "bolder":       "Сделай анализ честнее: скажи прямо что конкурент делает лучше и где реальная угроза. Без дипломатии.",
+        "shorter":      "Оставь только: главный конкурентный разрыв, стратегию переманивания аудитории, 3 шага на этой неделе.",
+        "add_detail":   "Добавь конкретные примеры контента конкурента который работает — и почему именно он работает на эту аудиторию.",
+        "stronger_cta": "Перепиши '3 конкретных шага' — каждый шаг должен быть действием которое можно выполнить сегодня.",
+        # Competitor-specific
+        "tactics":      "Перепиши раздел 'Стратегия переманивания аудитории': укажи конкретные темы постов, форматы и дни публикации — а не общие рекомендации.",
+        "positioning":  "Добавь или перепиши раздел 'Дифференцирующая фраза': одно предложение которое автор может использовать в шапке профиля или в контенте чтобы чётко отличаться от этого конкурента. Формат: 'В отличие от [конкурент], я [конкретное отличие] — потому что [причина важная для аудитории].'",
     },
 }
 
@@ -108,38 +142,93 @@ def _get_agent_refine_prompts(agent_key: str) -> dict[str, str]:
     return _AGENT_REFINE_PROMPTS.get(agent_key, _AGENT_REFINE_PROMPTS["_default"])
 
 
-def _agent_edit_panel_kb(spec_key: str, completed: set | None = None) -> object:
+def _agent_edit_panel_kb(spec_key: str, completed: set | None = None,
+                          refinement_count: int = 0) -> object:
     """
-    Панель доработки после генерации.
+    Панель доработки после генерации — инструментно-специфичная.
     completed: множество уже выполненных действий — они исключаются из клавиатуры.
-    Это решает проблему 'кнопка остаётся после выполнения'.
+    refinement_count: сколько правок применено — при 3+ показываем drift warning.
     """
     from utils import kb as _kb
     done = completed or set()
 
+    # Drift warning after 3+ refinements
+    drift_warning = ""
+    if refinement_count >= 3:
+        drift_warning = f"\n\n⚠️ _Применено правок: {refinement_count}. Контент может отдалиться от исходного замысла._"
+
     rows = []
-    row1 = []
-    if "softer" not in done:
-        row1.append("🎨 Мягче|ag_edit_softer")
-    if "bolder" not in done:
-        row1.append("🔥 Жёстче|ag_edit_bolder")
-    if row1:
-        rows.append(row1)
 
-    row2 = []
-    if "shorter" not in done:
-        row2.append("✂️ Сократить|ag_edit_shorter")
-    if "detail" not in done:
-        row2.append("➕ Деталь|ag_edit_detail")
-    if row2:
-        rows.append(row2)
+    # Tool-specific panels
+    if spec_key == "warmup":
+        # Warmup: no "bolder" top-level, Day 1 is protected
+        if "resonance" not in done:
+            rows.append(["✨ Усилить резонанс|ag_edit_resonance", "🎨 Мягче|ag_edit_softer"])
+        if "add_proof" not in done:
+            rows.append(["📣 Добавить доказательство|ag_edit_add_proof"])
+        if "cta" not in done:
+            rows.append(["💪 Усилить оффер Дня 3|ag_edit_cta"])
 
-    if "cta" not in done:
-        rows.append(["💪 Усилить CTA|ag_edit_cta"])
+    elif spec_key == "profile":
+        # Profile: additive refinements only
+        if "deepen" not in done:
+            rows.append(["🔬 Углубить раздел|ag_edit_deepen"])
+        if "shorter" not in done:
+            rows.append(["✂️ Компактная версия|ag_edit_shorter"])
+        # No "bolder/softer" — profile is diagnostic, not stylistic
+
+    elif spec_key == "competitor":
+        if "tactics" not in done:
+            rows.append(["⚡ Конкретнее тактики|ag_edit_tactics"])
+        if "positioning" not in done:
+            rows.append(["🎯 Фраза позиционирования|ag_edit_positioning"])
+
+    elif spec_key == "stories":
+        if "softer" not in done:
+            rows.append(["🎨 Разговорнее|ag_edit_softer", "🔥 Острее|ag_edit_bolder"])
+        if "shorter" not in done:
+            rows.append(["✂️ Сократить слайды|ag_edit_shorter"])
+        if "mid_hook" not in done:
+            rows.append(["🎣 Усилить слайды 5-7|ag_edit_mid_hook"])
+
+    elif spec_key in ("talking_head", "cartoon"):
+        if "softer" not in done:
+            rows.append(["🎨 Разговорнее|ag_edit_softer", "🔥 Острее|ag_edit_bolder"])
+        if "shorter" not in done:
+            rows.append(["✂️ До 60 сек|ag_edit_shorter"])
+        if "hook" not in done:
+            rows.append(["🎬 Переписать хук (0-3 сек)|ag_edit_hook"])
+
+    elif spec_key == "post":
+        if "softer" not in done:
+            rows.append(["🎨 Мягче|ag_edit_softer", "🔥 Жёстче|ag_edit_bolder"])
+        if "shorter" not in done:
+            rows.append(["✂️ Сократить|ag_edit_shorter", "➕ Деталь|ag_edit_detail"])
+        if "cta" not in done:
+            rows.append(["💪 Усилить CTA|ag_edit_cta"])
+
+    else:
+        # Default panel
+        row1 = []
+        if "softer" not in done:
+            row1.append("🎨 Мягче|ag_edit_softer")
+        if "bolder" not in done:
+            row1.append("🔥 Жёстче|ag_edit_bolder")
+        if row1:
+            rows.append(row1)
+        row2 = []
+        if "shorter" not in done:
+            row2.append("✂️ Сократить|ag_edit_shorter")
+        if "detail" not in done:
+            row2.append("➕ Деталь|ag_edit_detail")
+        if row2:
+            rows.append(row2)
+        if "cta" not in done:
+            rows.append(["💪 Усилить CTA|ag_edit_cta"])
 
     rows.append(["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"])
     rows.append([f"🔁 Заново|agent_restart_{spec_key}", "← Меню|menu_main"])
-    return _kb(*rows)
+    return _kb(*rows), drift_warning
 
 # Статусные сообщения с голосом Миры
 _STATUS_THINKING = [
@@ -429,6 +518,60 @@ async def _is_offtopic(question: str, answer: str, agent_name: str) -> bool:
         return False  # при ошибке классификатора — не блокируем
 
 
+async def _extract_cip_from_interview(user_id: int, agent_key: str, history: list) -> None:
+    """
+    После завершения интервью извлекает стратегические сигналы в CIP:
+    - warmup: audience_trust_level, audience_primary_objection, active_launch
+    - competitor: positioning cue
+    - all: current_funnel_phase hint
+    Использует быстрый LLM-вызов с JSON-ответом.
+    """
+    if not history:
+        return
+    try:
+        from db import get_cip, save_cip
+        interview_text = "\n".join(
+            f"{'Агент' if m['role'] == 'assistant' else 'Пользователь'}: {m['content'][:300]}"
+            for m in history[-10:]  # последние 10 сообщений достаточно
+        )
+        extract_system = (
+            "Ты извлекаешь стратегические данные из интервью. "
+            "Отвечай ТОЛЬКО JSON без пояснений и без markdown-обёртки.\n\n"
+            "Поля (все опциональные, включай только если есть явные данные):\n"
+            '{"audience_trust_level": 1-10, '
+            '"audience_primary_objection": "текст главного возражения", '
+            '"active_launch": true/false, '
+            '"current_funnel_phase": "awareness|consideration|conversion|retention"}'
+        )
+        raw = await llm.complete(extract_system, interview_text, temperature=0.0)
+        import json as _json
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start < 0 or end <= start:
+            return
+        data = _json.loads(raw[start:end])
+        if not data:
+            return
+        cip = await get_cip(user_id)
+        if "audience_trust_level" in data:
+            try:
+                cip["audience_trust_level"] = int(data["audience_trust_level"])
+            except (ValueError, TypeError):
+                pass
+        if "audience_primary_objection" in data and data["audience_primary_objection"]:
+            cip["audience_primary_objection"] = str(data["audience_primary_objection"])[:200]
+        if "active_launch" in data:
+            cip["active_launch"] = bool(data["active_launch"])
+        if "current_funnel_phase" in data and data["current_funnel_phase"] in (
+            "awareness", "consideration", "conversion", "retention"
+        ):
+            cip["current_funnel_phase"] = data["current_funnel_phase"]
+        await save_cip(user_id, cip)
+        logger.info(f"[cip_extract] user={user_id} agent={agent_key} → {data}")
+    except Exception as e:
+        logger.debug(f"[cip_extract] user={user_id} skipped: {e}")
+
+
 async def _interview_step(update: Update, user_id: int,
                            spec: AgentSpec, text: str, session: dict) -> None:
     ih = session["history"]
@@ -483,6 +626,8 @@ async def _interview_step(update: Update, user_id: int,
     clean_msg = next_msg.replace("[READY]", "").replace("[ready]", "").strip()
     if _DONE_SIGNAL in next_msg.lower() or session["q_count"] >= spec.max_q:
         await send(update, clean_msg, parse_mode="Markdown")
+        # Extract strategic signals from interview into CIP before generating
+        await _extract_cip_from_interview(user_id, spec.key, session["history"])
         if spec.accept_photos:
             await _offer_photos(update, user_id, spec, session)
         elif spec.has_pick_step:
@@ -634,6 +779,8 @@ async def generate(update: Update, user_id: int,
             cip_parts.append(f"Уровень доверия аудитории: {cip['audience_trust_level']}/10")
         if cip.get("audience_primary_objection"):
             cip_parts.append(f"Главное возражение аудитории: {cip['audience_primary_objection']}")
+        if cip.get("positioning_statement"):
+            cip_parts.append(f"Позиционирование автора: {cip['positioning_statement']}")
         if cip.get("active_launch"):
             cip_parts.append("АКТИВНЫЙ ЗАПУСК: контент должен поддерживать прогрев")
         # For planner — inject backlog
@@ -882,12 +1029,11 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
         from utils import kb as _kb
         from voice_learner import voice_feedback_kb as _vfkb
 
-        # Компактная панель: voice feedback + правки в одном сообщении
+        # Tool-specific edit panel (returns kb + drift_warning)
+        _panel_kb, _drift = _agent_edit_panel_kb(spec.key)
+        # Combine with voice feedback
         combined_kb = _vfkb(_result_id, extra_rows=[
-            ["🎨 Мягче|ag_edit_softer",           "🔥 Жёстче|ag_edit_bolder"],
-            ["✂️ Сократить|ag_edit_shorter",       "➕ Деталь|ag_edit_detail"],
-            ["✏️ Доработать свободно|refine_last", "🔄 Другой вариант|regen_last"],
-            [f"🔁 Заново|agent_restart_{spec.key}", "← Меню|menu_main"],
+            r for r in _panel_kb.inline_keyboard
         ])
         await send(
             update,
@@ -897,7 +1043,8 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
         )
     else:
         # Нет result_id — только панель правок
-        await send(update, "Докрути под себя 👇", reply_markup=_agent_edit_panel_kb(spec.key))
+        _panel_kb, _drift = _agent_edit_panel_kb(spec.key)
+        await send(update, "Докрути под себя 👇", reply_markup=_panel_kb)
 
     # Сохраняем отложенную proactive-подсказку — покажется при следующем меню
     try:
@@ -1007,8 +1154,8 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
         logger.error(f"[agents] apply_edit {edit_key} failed: {e}")
         _tt.cancel()
         await safe_delete(status)
-        _panel = _agent_edit_panel_kb(_spec_key)
-        await send(update, "Не получилось — попробуй ещё раз 🔁", reply_markup=_panel)
+        _panel_kb, _ = _agent_edit_panel_kb(_spec_key)
+        await send(update, "Не получилось — попробуй ещё раз 🔁", reply_markup=_panel_kb)
         return
     finally:
         _tt.cancel()
@@ -1016,20 +1163,37 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
     await safe_delete(status)
 
     if not new_result or not new_result.strip():
+        _panel_kb, _ = _agent_edit_panel_kb(_spec_key)
         await send(update, "Пустой ответ — попробуй ещё раз.",
-                   reply_markup=_agent_edit_panel_kb(_spec_key))
+                   reply_markup=_panel_kb)
         return
 
     # Трекинг завершённых действий — эта кнопка исчезнет из следующей клавиатуры
     _completed = set(_s.get("completed_actions", []))
     _completed.add(edit_key)
+    _refinement_count = _s.get("refinement_count", 0) + 1
 
     # Обновляем сохранённый last_result
     _s["last_result"] = new_result
+    _s["refinement_count"] = _refinement_count
     try:
         await save_agent_session(user_id, f"__ag_edit_{_spec_key}__", _s)
     except Exception:
         pass
+
+    # Side-effect: save positioning_statement to CIP after competitor edit
+    if edit_key == "positioning" and _spec_key == "competitor":
+        try:
+            from db import get_cip, save_cip as _sc
+            _cip = await get_cip(user_id)
+            # Extract the positioning sentence from the result
+            for _line in new_result.split("\n"):
+                if "В отличие от" in _line or "отличие" in _line.lower():
+                    _cip["positioning_statement"] = _line.strip()[:300]
+                    break
+            await _sc(user_id, _cip)
+        except Exception:
+            pass
 
     try:
         _name = spec.name if spec else _spec_key
@@ -1050,4 +1214,5 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
-    await send(update, "Ещё докрутить?", reply_markup=_agent_edit_panel_kb(_spec_key, _completed))
+    _panel_kb, _drift = _agent_edit_panel_kb(_spec_key, _completed, _refinement_count)
+    await send(update, f"Ещё докрутить?{_drift}", parse_mode="Markdown", reply_markup=_panel_kb)
