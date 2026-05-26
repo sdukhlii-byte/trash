@@ -182,9 +182,14 @@ async def daily_push_send_now(ctx, user_id: int, bot) -> None:
     Отправляет утренний пуш пользователю.
     Сначала проверяет кэш (батч 06:00 UTC), при промахе — генерирует на лету.
 
-    Работает для ВСЕХ пользователей у которых включён пуш,
-    независимо от статуса подписки (TRIAL, SUBSCRIBED, ONBOARDED).
+    Только для TRIAL и SUBSCRIBED — не тратим LLM на пользователей без доступа.
     """
+    from user_state import get_user_state, has_access
+    state = await get_user_state(user_id)
+    if not has_access(state):
+        logger.info(f"[daily_push] skip uid={user_id} — no active access (state={state.value})")
+        return
+
     result = await _get_cached_push(user_id)
 
     if not result:
