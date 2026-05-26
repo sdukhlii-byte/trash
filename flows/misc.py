@@ -902,16 +902,30 @@ async def style_menu(update: Update, user_id: int) -> None:
 
 
 async def style_add_start(update: Update, user_id: int) -> None:
-    await save_agent_session(user_id, _STYLE_KEY, {"step": "await_example"})
+    """
+    Пункт 4: batch-режим сбора постов через __collecting_posts__ в Redis.
+    Пункт 5: проактивный совет про скриншоты — удобнее чем копировать текст.
+    """
+    import json as _json
+    collecting_session = {
+        "mode": "collecting_posts",
+        "collected": [],
+        "target_count": 10,
+    }
+    await kv_set(user_id, "__collecting_posts__",
+                 _json.dumps(collecting_session, ensure_ascii=False), ttl=3600)
+    await clear_agent_session(user_id, _STYLE_KEY)
     await send(
         update,
-        "📝 *Добавь свой пост*\n\n"
-        "Скопируй и отправь текст — лучше целиком, без обрезки.\n\n"
-        "_Подойдёт любой пост который тебе нравится: "
-        "Мира запомнит структуру, лексику, длину абзацев, твои обороты.\n\n"
-        "Можно добавить до 10 постов._",
+        "📝 *Обучение голосу*\n\n"
+        "Пришли мне 10 своих лучших постов — скинь все одним за другим, я подожду 🙌\n\n"
+        "💡 *Совет:* Скриншоты удобнее всего — сделай скрин прямо в Instagram "
+        "и кидай сюда. Не надо ничего копировать, я сама прочитаю текст 📸\n\n"
+        "_Можно смешивать: скриншоты + текстом. "
+        "Чем больше примеров — тем точнее буду писать в твоём стиле._\n\n"
+        "Когда пришлёшь все — напиши «Готово» или я остановлюсь сама на 10.",
         parse_mode="Markdown",
-        reply_markup=kb(["← Назад|style_menu"]),
+        reply_markup=kb(["⏹ Завершить сбор|style_collect_done", "← Назад|style_menu"]),
     )
 
 

@@ -861,6 +861,35 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await send(update, "🗑 Примеры стиля удалены.", reply_markup=kb(["← Кабинет|sub_cabinet"]))
         return
 
+    # Пункт 4: принудительное завершение batch-сбора постов (кнопка «Завершить сбор»)
+    if data == "style_collect_done":
+        import json as _json
+        from db import kv_del as _kv_del, kv_get as _kv_get
+        raw = await _kv_get(user_id, "__collecting_posts__")
+        if raw:
+            session = _json.loads(raw)
+            collected = session.get("collected", [])
+            await _kv_del(user_id, "__collecting_posts__")
+            if collected:
+                await send(
+                    update,
+                    f"✅ Собрала {len(collected)} постов — анализирую твой голос... "
+                    f"Это займёт минуту 🔍",
+                )
+                import asyncio as _asyncio
+                from handlers.messages import finalize_voice_learning
+                _asyncio.create_task(finalize_voice_learning(collected, user_id, update))
+            else:
+                await send(
+                    update,
+                    "Пока не получила ни одного поста. "
+                    "Скинь хотя бы один — текстом или скриншотом 📸",
+                    reply_markup=kb(["← Назад|style_menu"]),
+                )
+        else:
+            await send(update, "Сбор постов не активен.", reply_markup=kb(["← Меню|menu_main"]))
+        return
+
     # ── Голосовое подтверждение (устаревшее — голос теперь роутится напрямую) ──
     if data == "voice_send":
         # Этот callback больше не используется — голос идёт сразу в routing
