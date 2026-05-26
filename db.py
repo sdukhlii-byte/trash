@@ -495,6 +495,111 @@ async def clear_all(user_id: int) -> None:
     await clear_all_agent_sessions(user_id)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Creator Intelligence Profile (CIP) — живая стратегическая память
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def get_cip(user_id: int) -> dict:
+    """
+    Возвращает Creator Intelligence Profile — живую стратегическую память бота.
+    Содержит: recent_topics, hooks_that_worked, current_funnel_phase,
+    audience_trust_level, content_backlog и другие стратегические поля.
+    """
+    raw = await kv_get(user_id, "__cip__")
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return {
+        "recent_topics": [],
+        "hooks_that_worked": [],
+        "hooks_that_failed": [],
+        "current_funnel_phase": "awareness",   # awareness / consideration / conversion / retention
+        "audience_trust_level": 5,             # 1-10
+        "audience_primary_objection": "",
+        "audience_sophistication": "medium",   # low / medium / high
+        "active_launch": False,
+        "content_backlog": [],
+        "positioning_statement": "",
+        "content_format_affinity": {},         # {"carousel": 0.8, "reels": 0.6}
+        "emotional_rhythm": [],                # последние 5 эмоций контента
+    }
+
+
+async def save_cip(user_id: int, cip: dict) -> None:
+    await kv_set(user_id, "__cip__", json.dumps(cip, ensure_ascii=False))
+
+
+async def update_cip(user_id: int, **fields) -> dict:
+    """Частичное обновление CIP. Возвращает обновлённый объект."""
+    cip = await get_cip(user_id)
+    cip.update(fields)
+    await save_cip(user_id, cip)
+    return cip
+
+
+async def add_recent_topic(user_id: int, topic: str) -> None:
+    """Добавляет тему в recent_topics (хранит последние 20)."""
+    cip = await get_cip(user_id)
+    topics = cip.get("recent_topics", [])
+    if topic and topic not in topics:
+        topics.append(topic)
+    cip["recent_topics"] = topics[-20:]
+    await save_cip(user_id, cip)
+
+
+async def add_hook_feedback(user_id: int, hook: str, worked: bool) -> None:
+    """Записывает обратную связь по хуку в CIP."""
+    cip = await get_cip(user_id)
+    key = "hooks_that_worked" if worked else "hooks_that_failed"
+    lst = cip.get(key, [])
+    lst.append(hook[:200])
+    cip[key] = lst[-30:]
+    await save_cip(user_id, cip)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Content Backlog — банк идей из Brainstorm для Planner
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def get_content_backlog(user_id: int) -> list:
+    """Возвращает банк контент-идей."""
+    cip = await get_cip(user_id)
+    return cip.get("content_backlog", [])
+
+
+async def add_to_backlog(user_id: int, idea: str, format_type: str = "") -> int:
+    """
+    Добавляет идею в контент-бэклог.
+    Возвращает новый размер бэклога.
+    """
+    cip = await get_cip(user_id)
+    backlog = cip.get("content_backlog", [])
+    entry = {"idea": idea[:300], "format": format_type, "used": False}
+    # Не дублируем идентичные идеи
+    if not any(b["idea"] == entry["idea"] for b in backlog):
+        backlog.append(entry)
+    cip["content_backlog"] = backlog[-50:]  # максимум 50 идей
+    await save_cip(user_id, cip)
+    return len(backlog)
+
+
+async def mark_backlog_used(user_id: int, idea: str) -> None:
+    """Помечает идею из бэклога как использованную."""
+    cip = await get_cip(user_id)
+    for entry in cip.get("content_backlog", []):
+        if entry.get("idea") == idea:
+            entry["used"] = True
+    await save_cip(user_id, cip)
+
+
+async def clear_content_backlog(user_id: int) -> None:
+    cip = await get_cip(user_id)
+    cip["content_backlog"] = []
+    await save_cip(user_id, cip)
+
+
 def build_profile_ctx(profile: dict) -> str:
     parts = []
     if profile.get("niche"):    parts.append(f"\nНиша автора: {profile['niche']}")

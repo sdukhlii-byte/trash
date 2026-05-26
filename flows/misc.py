@@ -66,11 +66,29 @@ async def qi_start(update: Update, user_id: int) -> None:
 
 async def qi_generate(update: Update, user_id: int, niche: str) -> None:
     profile = await get_profile(user_id)
+
+    # Build CIP context for novelty filtering
+    cip_ctx_parts = []
+    try:
+        from db import get_cip
+        cip = await get_cip(user_id)
+        if cip.get("recent_topics"):
+            cip_ctx_parts.append(f"Недавние темы (избегай повторов): {', '.join(cip['recent_topics'][-5:])}")
+        if cip.get("current_funnel_phase"):
+            cip_ctx_parts.append(f"Текущий этап воронки: {cip['current_funnel_phase']}")
+        if cip.get("audience_trust_level"):
+            cip_ctx_parts.append(f"Уровень доверия аудитории: {cip['audience_trust_level']}/10")
+    except Exception:
+        pass
+
+    cip_block = ("\n\nСТРАТЕГИЧЕСКИЙ КОНТЕКСТ:\n" + "\n".join(cip_ctx_parts)) if cip_ctx_parts else ""
+
     prompt = (
         f"Ниша: {niche}\n"
         f"Аудитория: {profile.get('audience', 'не указана')}\n"
-        f"Тон: {profile.get('tone', 'живой')}\n\n"
-        "Дай 10 конкретных идей для постов. Нумерованный список, без вступлений."
+        f"Тон: {profile.get('tone', 'живой')}"
+        + cip_block +
+        "\n\nДай 10 конкретных идей. Каждая — готовый хук, не абстрактная тема. Без вступлений."
     )
     status = await update.effective_chat.send_message("Генерирую 10 идей под твою нишу...")
     try:
@@ -90,15 +108,33 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
                    reply_markup=kb(["🔄 Повторить|quick_ideas", "← Меню|menu_main"]))
         return
     await clear_agent_session(user_id, _QI_KEY)
+
+    # Save topic to CIP recent_topics
+    try:
+        from db import add_recent_topic
+        await add_recent_topic(user_id, niche[:100])
+    except Exception:
+        pass
+
     try:
         await save_result(user_id, "quick_ideas", "10 идей быстро", result)
     except Exception as e:
         logger.warning(f"save_result qi failed: {e}")
+
+    # Store result in session for backlog action
+    try:
+        await save_agent_session(user_id, _QI_KEY, {"last_ideas": result, "step": "done"})
+    except Exception:
+        pass
+
     await send(
         update,
         f"💡 *10 идей для постов:*\n\n{result}",
         parse_mode="Markdown",
-        reply_markup=kb(["🔄 Ещё 10 идей|quick_ideas", "← Меню|menu_main"]),
+        reply_markup=kb(
+            ["🔄 Ещё 10 идей|quick_ideas", "💾 В банк идей|qi_save_backlog"],
+            ["← Меню|menu_main"],
+        ),
     )
     # Стрик
     try:
@@ -477,6 +513,43 @@ async def planner_show(update: Update, user_id: int) -> None:
                    ["← Меню|menu_main"],
                ))
 
+
+
+
+async def qi_save_backlog(update: Update, user_id: int) -> None:
+    """Сохраняет последние идеи из браинсторма в content_backlog."""
+    try:
+        session = await get_agent_session(user_id, _QI_KEY)
+        ideas_text = (session or {}).get("last_ideas", "")
+        if not ideas_text:
+            await send(update, "Нет свежих идей для сохранения. Сначала сгенерируй идеи.",
+                       reply_markup=kb(["← Меню|menu_main"]))
+            return
+        from db import add_to_backlog
+        # Parse numbered ideas and add each
+        lines = [l.strip() for l in ideas_text.split("\n") if l.strip()]
+        saved = 0
+        for line in lines:
+            # Match lines starting with number+dot or number+period
+            if line and (line[0].isdigit() or line.startswith("•")):
+                # Extract just the idea text (first quoted or after number)
+                idea = line.lstrip("0123456789. •").strip()
+                if idea and len(idea) > 10:
+                    await add_to_backlog(user_id, idea)
+                    saved += 1
+        if saved:
+            await send(update,
+                f"✅ *{saved} идей сохранено в банк идей!*\n\n"
+                "Планировщик будет использовать их при создании следующей недели.",
+                parse_mode="Markdown",
+                reply_markup=kb(["🔄 Ещё идеи|quick_ideas", "← Меню|menu_main"]))
+        else:
+            await send(update, "Не удалось распарсить идеи. Попробуй ещё раз.",
+                       reply_markup=kb(["← Меню|menu_main"]))
+    except Exception as e:
+        logger.error(f"[qi_save_backlog] error: {e}")
+        await send(update, "Ошибка при сохранении. Попробуй позже.",
+                   reply_markup=kb(["← Меню|menu_main"]))
 
 async def planner_gen_week(update: Update, user_id: int) -> None:
     profile = await get_profile(user_id)

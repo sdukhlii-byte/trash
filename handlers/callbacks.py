@@ -31,7 +31,7 @@ from flows.reels import (
 )
 from flows.carousel import _CAR_KEY, carousel_format_kb, carousel_trigger_kb
 from flows.misc import (
-    qi_start, refine_start, regen_last, regen_by_id,
+    qi_start, qi_save_backlog, refine_start, regen_last, regen_by_id,
     planner_show, planner_gen_week, planner_add_start,
     daily_menu, style_menu, style_add_start,
     schedule_daily,
@@ -551,6 +551,10 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     if data == "quick_ideas":
         await clear_all_agent_sessions(user_id)
         await qi_start(update, user_id)
+        return
+
+    if data == "qi_save_backlog":
+        await qi_save_backlog(update, user_id)
         return
 
     # ── Библиотека ────────────────────────────────────────────────────────────

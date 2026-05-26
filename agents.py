@@ -68,11 +68,11 @@ _AGENT_REFINE_PROMPTS: dict[str, dict[str, str]] = {
         "stronger_cta": "Перепиши последний абзац: сделай CTA конкретным, с выгодой для читателя.",
     },
     "warmup": {
-        "softer":       "Смягчи тон серии: убери ощущение продажи, добавь заботу и поддержку.",
-        "bolder":       "Усиль прогрев: добавь больше конфликта, боли аудитории, ощущения срочности.",
-        "shorter":      "Сократи каждый пост серии до 100-150 слов. Оставь только суть.",
+        "softer":       "Смягчи тон серии: убери ощущение продажи, добавь заботу и поддержку. ДЕНЬ 1 — сохрани мягкость полностью.",
+        "bolder":       "__WARMUP_BOLDER_GUARD__",
+        "shorter":      "Сократи каждый пост серии до 100-150 слов. Оставь только суть и психологическую логику каждого дня.",
         "add_detail":   "Добавь социальное доказательство — историю клиента или кейс — в самый слабый пост серии.",
-        "stronger_cta": "Усиль финальный призыв в последнем посте серии.",
+        "stronger_cta": "Усиль финальный призыв в последнем посте серии (День 3). ДЕНЬ 1 — CTA остаётся мягким.",
     },
     "stories": {
         "softer":       "Перепиши сторис в более живом и неформальном стиле — как разговор с подругой.",
@@ -608,11 +608,41 @@ async def generate(update: Update, user_id: int,
     profile        = await get_profile(user_id)
     style_examples = await get_style_examples(user_id)
 
-    # Строим полный контекст: голос + ниша = уникальный output
+    # Строим полный контекст: голос + ниша + CIP = уникальный output
     voice_ctx = await build_voice_context(user_id)
     niche_ctx = build_niche_context(profile.get("niche", ""))
     base_sys  = await _resolve_generator_custom(user_id, spec, session, profile)
-    sys_prompt = base_sys + voice_ctx + niche_ctx
+
+    # Inject CIP strategic context
+    cip_ctx = ""
+    try:
+        from db import get_cip, get_content_backlog
+        cip = await get_cip(user_id)
+        cip_parts = []
+        if cip.get("recent_topics"):
+            cip_parts.append(f"Недавние темы (не повторяй): {', '.join(cip['recent_topics'][-5:])}")
+        if cip.get("hooks_that_worked"):
+            cip_parts.append(f"Хуки которые работали: {'; '.join(cip['hooks_that_worked'][-3:])}")
+        if cip.get("current_funnel_phase"):
+            cip_parts.append(f"Текущий этап воронки: {cip['current_funnel_phase']}")
+        if cip.get("audience_trust_level"):
+            cip_parts.append(f"Уровень доверия аудитории: {cip['audience_trust_level']}/10")
+        if cip.get("audience_primary_objection"):
+            cip_parts.append(f"Главное возражение аудитории: {cip['audience_primary_objection']}")
+        if cip.get("active_launch"):
+            cip_parts.append("АКТИВНЫЙ ЗАПУСК: контент должен поддерживать прогрев")
+        # For planner — inject backlog
+        if spec.key in ("planner", "qi_start"):
+            backlog = await get_content_backlog(user_id)
+            unused = [b["idea"] for b in backlog if not b.get("used")][:5]
+            if unused:
+                cip_parts.append(f"Идеи из банка идей (используй если подходят): {'; '.join(unused)}")
+        if cip_parts:
+            cip_ctx = "\n\nСТРАТЕГИЧЕСКИЙ КОНТЕКСТ:\n" + "\n".join(cip_parts)
+    except Exception:
+        pass
+
+    sys_prompt = base_sys + voice_ctx + niche_ctx + cip_ctx
 
     try:
         photos = [[b64, mime] for b64, mime in session.get("photos", [])]
@@ -745,6 +775,20 @@ async def _send_result(update: Update, result: str,
         for chunk in [rest[i:i + 4000] for i in range(0, len(rest), 4000)]:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
+
+    # WHY LAYER — обучающий слой (одно предложение о механизме)
+    try:
+        from config import WHY_LAYER_PROMPT
+        why_sys = WHY_LAYER_PROMPT
+        why_result = await llm.complete(
+            why_sys,
+            f"Инструмент: {spec.key}\nКонтент:\n{result[:800]}",
+            temperature=0.5,
+        )
+        if why_result and why_result.strip():
+            await send(update, why_result.strip(), parse_mode="Markdown")
+    except Exception:
+        pass
 
     # Стикер/GIF при первой генерации
     try:
@@ -899,12 +943,36 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
 
     profile = await get_profile(user_id)
     spec    = get_spec(_spec_key)
+
+    # Warmup Day 1 bolder guard
+    if instruction == "__WARMUP_BOLDER_GUARD__":
+        session_data = _s
+        warmup_day = session_data.get("warmup_day", 0)
+        if warmup_day == 1 or "ДЕНЬ 1" in current[:500]:
+            await send(update,
+                "⚠️ *День 1 прогрева строит доверие — давление здесь разрушает всю стратегию.*\n\n"
+                "Могу усилить эмоциональный резонанс сохраняя мягкость. Хочешь так?",
+                parse_mode="Markdown",
+                reply_markup=kb(
+                    ["✅ Да, усилить резонанс|ag_edit_add_detail", "← Назад|menu_main"]
+                ))
+            return
+        else:
+            instruction = "Усиль прогрев: конкретнее про боль аудитории, убери расплывчатые формулировки. ДЕНЬ 3: можно усилить ощущение срочности."
+
+    # Build strategic context for refine
+    from db import get_cip
+    cip = await get_cip(user_id)
+    funnel_stage = cip.get("current_funnel_phase", "awareness")
+    audience_trust = cip.get("audience_trust_level", 5)
+
     system = (
-        f"Ты — редактор контента. "
+        f"Ты — стратегический редактор контента. "
         f"Ниша автора: {profile.get('niche', '')}. "
         f"Аудитория: {profile.get('audience', '')}. "
-        f"Тон: {profile.get('tone', 'живой')}.\n\n"
-        f"Текущий материал:\n{current}"
+        f"Тон: {profile.get('tone', 'живой')}.\n"
+        f"Инструмент: {_spec_key}. Этап воронки: {funnel_stage}. Доверие аудитории: {audience_trust}/10.\n\n"
+        f"ТЕКУЩИЙ МАТЕРИАЛ:\n{current}"
     )
 
     status = await update.effective_chat.send_message("Переписываю...")

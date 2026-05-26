@@ -244,6 +244,19 @@ async def rs_gen(update: Update, user_id: int, topic: str) -> None:
     except Exception as e:
         logger.warning(f"save_result rs failed: {e}")
 
+    # Update CIP: add topic to recent_topics, store hooks for learning
+    try:
+        from db import add_recent_topic, get_cip, save_cip
+        await add_recent_topic(user_id, topic[:100])
+        cip = await get_cip(user_id)
+        # Extract first few hooks to remember
+        hook_lines = [l.strip() for l in headlines.split("\n")
+                      if l.strip() and (l.strip()[0].isdigit() or l.strip().startswith("«"))]
+        cip["hooks_that_worked"] = (cip.get("hooks_that_worked", []) + hook_lines[:3])[-30:]
+        await save_cip(user_id, cip)
+    except Exception:
+        pass
+
     try:
         from ui.home import update_streak_on_result
         await update_streak_on_result(user_id)
