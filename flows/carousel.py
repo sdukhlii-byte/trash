@@ -29,7 +29,7 @@ from db import (
 from llm import complete, chat, generate_from_history, complete_long
 from security import protect
 from prompt_editor import get_prompt
-from utils import send, edit, kb, safe_delete
+from utils import send, edit, kb, safe_delete, typing_loop
 from voice_learner import build_voice_context, voice_feedback_kb
 from config import (
     CAROUSEL_FORMATS_4, CAROUSEL_TRIGGERS_20,

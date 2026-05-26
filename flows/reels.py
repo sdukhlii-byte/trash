@@ -29,7 +29,7 @@ from db import (
 from llm import complete
 from security import protect
 from prompt_editor import get_prompt
-from utils import send, kb, safe_delete
+from utils import send, kb, safe_delete, typing_loop
 from voice_learner import build_voice_context, voice_feedback_kb
 from config import build_reels_short_headline_system, build_reels_short_desc_system
 
@@ -490,7 +490,7 @@ async def rs_hook_chosen_for_desc(update: Update, user_id: int, text: str, s: di
 
 
 async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
-    """Генерирует описание к выбранному хуку."""
+    """Генерирует описание к выбранному хуку с соблюдением хук-контракта."""
     profile = await get_profile(user_id)
     base    = build_reels_short_desc_system(
         profile.get("niche", "не указана"),
@@ -498,11 +498,28 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
         profile.get("tone", "живой"),
     )
     system  = protect(user_id, await get_prompt(user_id, "reels_short_desc", base))
+
+    # Hook contract: extract the mechanism label from the chosen hook line
+    # Hooks are formatted as: «текст хука» [МЕХАНИЗМ]
+    chosen_hook = s.get("chosen", "")
+    hook_mechanism = ""
+    _mech_match = re.search(r"\[([А-ЯЁA-Z][А-ЯЁA-Za-z\-]+(?:[- ][А-ЯЁA-Za-z]+)*)\]", chosen_hook)
+    if _mech_match:
+        hook_mechanism = _mech_match.group(1)
+
+    mechanism_hint = (
+        f"\nПСИХОЛОГИЧЕСКИЙ МЕХАНИЗМ ХУКА: {hook_mechanism}. "
+        "Описание должно либо углубить этот механизм (если он требует продолжения), "
+        "либо зайти с контрастной стороны (если механизм уже сделал работу). "
+        "ЗАПРЕЩЕНО: повторять механизм хука теми же словами."
+    ) if hook_mechanism else ""
+
     prompt  = (
         f"Тема: {s.get('topic', '')}\n"
-        f"Хук: {s.get('chosen', '')}\n"
+        f"Хук: {chosen_hook}\n"
         f"Детали: {s.get('desc_details', 'нет')}\n"
         f"CTA: {s.get('destination', 'подписаться')}"
+        f"{mechanism_hint}"
     )
     status = await update.effective_chat.send_message("Пишу описание — хочу чтобы оно усиливало рилс...")
     try:

@@ -29,6 +29,7 @@ from utils import send, kb, safe_delete, typing_loop
 from config import (
     QUICK_IDEAS_SYSTEM, REFINE_SYSTEM, REGEN_SYSTEM,
     PLANNER_IDEAS_SYSTEM, DAILY_DIGEST_SYSTEM,
+    CONTENT_DIAGNOSTIC_SYSTEM,
 )
 
 logger = logging.getLogger(__name__)
@@ -861,3 +862,74 @@ async def style_save_example(update: Update, user_id: int, text: str) -> None:
         parse_mode="Markdown",
         reply_markup=kb(["➕ Ещё пример|style_add", "← Меню|menu_main"]),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONTENT DIAGNOSTIC MODE (#29)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DIAG_KEY = "diagnostic_flow"
+
+
+async def diagnostic_start(update: Update, user_id: int) -> None:
+    """Запускает режим диагностики контента."""
+    await clear_agent_session(user_id, _DIAG_KEY)
+    await save_agent_session(user_id, _DIAG_KEY, {"step": "await_content"})
+    await send(
+        update,
+        "🔍 *Диагностика контента*\n\n"
+        "Отправь текст поста, рилса или карусели который не сработал так как ты ожидала.\n\n"
+        "_Мира разберёт: почему хук не зацепил, выполнено ли обещание, правильный ли CTA, "
+        "и что одно изменение даст наибольший прирост._",
+        parse_mode="Markdown",
+        reply_markup=kb(["← Меню|menu_main"]),
+    )
+
+
+async def diagnostic_run(update: Update, user_id: int, content: str) -> None:
+    """Запускает диагностику по переданному контенту."""
+    profile = await get_profile(user_id)
+    prompt = (
+        f"Ниша автора: {profile.get('niche', 'не указана')}\n"
+        f"Аудитория: {profile.get('audience', 'не указана')}\n\n"
+        f"КОНТЕНТ ДЛЯ ДИАГНОЗА:\n{content}"
+    )
+    status = await update.effective_chat.send_message("Анализирую — ищу главную проблему...")
+    _tt = asyncio.create_task(_typing_loop(update.effective_chat))
+    try:
+        result = await complete(CONTENT_DIAGNOSTIC_SYSTEM, prompt, temperature=0.5)
+    except Exception as e:
+        logger.error(f"[diagnostic] error: {e}")
+        result = None
+    finally:
+        _tt.cancel()
+    await safe_delete(status)
+    await clear_agent_session(user_id, _DIAG_KEY)
+
+    if not result:
+        await send(update, "Не получилось — попробуй ещё раз 🔁",
+                   reply_markup=kb(["🔍 Попробовать снова|diagnostic_start", "← Меню|menu_main"]))
+        return
+
+    try:
+        await save_result(user_id, "diagnostic", "Диагностика контента", result)
+    except Exception:
+        pass
+
+    await send(
+        update,
+        f"🔍 *Диагноз:*\n\n{result}",
+        parse_mode="Markdown",
+        reply_markup=kb(
+            ["✏️ Доработать с учётом диагноза|refine_last"],
+            ["🔍 Другой контент|diagnostic_start", "← Меню|menu_main"],
+        ),
+    )
+
+
+async def route_diagnostic_text(update: Update, user_id: int, text: str, s: dict) -> bool:
+    """Роутер текстовых сообщений для диагностики."""
+    if s.get("step") == "await_content":
+        await diagnostic_run(update, user_id, text)
+        return True
+    return False

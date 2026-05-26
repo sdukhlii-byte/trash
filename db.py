@@ -523,7 +523,8 @@ async def get_cip(user_id: int) -> dict:
         "content_backlog": [],
         "positioning_statement": "",
         "content_format_affinity": {},         # {"carousel": 0.8, "reels": 0.6}
-        "emotional_rhythm": [],                # последние 5 эмоций контента
+        "emotional_rhythm": [],                # последние 10 эмоций контента
+        "warmup_neutralized_objections": [],   # возражения нейтрализованные в последнем прогреве
     }
 
 

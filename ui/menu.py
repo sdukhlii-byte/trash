@@ -38,7 +38,7 @@ def more_menu_kb() -> object:
         ["📅 Контент-план TG|agent_start_tg_plan",    "🔎 Разбор конкурента|agent_start_competitor"],
         ["🔍 Разбор профиля|agent_start_profile",     "🧠 Мозговой штурм|quick_ideas"],
         ["🗓 Планировщик|planner_show",               "☀️ Утренний брифинг|daily_menu"],
-        ["📈 Мой прогресс|my_stats"],
+        ["🩺 Диагностика контента|diagnostic_start",  "📈 Мой прогресс|my_stats"],
         ["← Главное меню|menu_main"],
     )
 

@@ -25,12 +25,13 @@ from flows.misc import (
     _REFINE_KEY, refine_do,
     _PLANNER_KEY, route_planner_text,
     _STYLE_KEY, style_save_example,
+    _DIAG_KEY, route_diagnostic_text,
 )
 from flows.reels import _RS_KEY, route_text as rs_route_text
 from flows.carousel import _CAR_KEY, route_text as car_route_text
 from ui.menu import main_menu_kb, show_menu
 from ui.paywall import show_paywall
-from utils import send, kb, safe_delete
+from utils import send, kb, safe_delete, typing_loop
 from prompt_editor import get_prompt, _PE_KEY, pe_save_text
 from config import CHAT_SYSTEM, MODELS
 import agents as ag
@@ -426,6 +427,11 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if planner_s and await route_planner_text(update, user_id, text, planner_s):
         return
 
+    # 2b2. Диагностика контента
+    diag_s = await get_agent_session(user_id, _DIAG_KEY)
+    if diag_s and await route_diagnostic_text(update, user_id, text, diag_s):
+        return
+
     # 2c. Стиль
     style_s = await get_agent_session(user_id, _STYLE_KEY)
     if style_s and style_s.get("step") == "await_example":
@@ -566,7 +572,11 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     # 7. Chat fallback
     model_key = await get_model(user_id)
     history   = await get_history(user_id, model_key, "chat")
-    _chat_base = CHAT_SYSTEM + build_profile_ctx(profile)
+    try:
+        from config import MIRA_KNOWLEDGE_LAYER as _mkl
+    except Exception:
+        _mkl = ""
+    _chat_base = CHAT_SYSTEM + _mkl + build_profile_ctx(profile)
     _chat_base_with_ctx = await __import__("chat_context").build_chat_system(_chat_base, user_id)
 
     # Если юзер открыл "Спроси Миру" — добавляем тёплый persona-суффикс

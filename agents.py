@@ -541,6 +541,7 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
             '{"audience_trust_level": 1-10, '
             '"audience_primary_objection": "текст главного возражения", '
             '"active_launch": true/false, '
+            '"audience_sophistication": "low|medium|high", '
             '"current_funnel_phase": "awareness|consideration|conversion|retention"}'
         )
         raw = await llm.complete(extract_system, interview_text, temperature=0.0)
@@ -553,6 +554,8 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
         if not data:
             return
         cip = await get_cip(user_id)
+        if "audience_sophistication" in data and data["audience_sophistication"] in ("low", "medium", "high"):
+            cip["audience_sophistication"] = data["audience_sophistication"]
         if "audience_trust_level" in data:
             try:
                 cip["audience_trust_level"] = int(data["audience_trust_level"])
@@ -777,10 +780,36 @@ async def generate(update: Update, user_id: int,
             cip_parts.append(f"Текущий этап воронки: {cip['current_funnel_phase']}")
         if cip.get("audience_trust_level"):
             cip_parts.append(f"Уровень доверия аудитории: {cip['audience_trust_level']}/10")
+        if cip.get("audience_sophistication") and cip["audience_sophistication"] != "medium":
+            _soph_map = {"low": "новички в теме — объясняй базово, без жаргона", "high": "продвинутая аудитория — пиши без разжёвывания, цени их время"}
+            cip_parts.append(f"Уровень аудитории: {_soph_map[cip['audience_sophistication']]}")
         if cip.get("audience_primary_objection"):
             cip_parts.append(f"Главное возражение аудитории: {cip['audience_primary_objection']}")
         if cip.get("positioning_statement"):
             cip_parts.append(f"Позиционирование автора: {cip['positioning_statement']}")
+        # Format affinity: surfaces which formats the audience has responded to
+        _affinity = cip.get("content_format_affinity", {})
+        if _affinity:
+            _top = sorted(_affinity.items(), key=lambda x: x[1], reverse=True)[:2]
+            _low = [k for k, v in _affinity.items() if v < 0.4]
+            if _top and _top[0][1] > 0.6:
+                cip_parts.append(f"Форматы которые аудитория одобряет: {', '.join(k for k, _ in _top)}")
+            if _low:
+                cip_parts.append(f"Форматы которые аудитория отвергает: {', '.join(_low)}")
+            # For brainstorm and planner: explicitly weight toward approved formats
+            if spec.key in ("qi_start", "planner") and _top and _top[0][1] > 0.6:
+                _preferred = _top[0][0]
+                _fmt_map = {
+                    "reels_short": "Рилс", "carousel": "Карусель",
+                    "post": "Пост", "stories": "Сторис",
+                    "warmup": "Прогрев", "talking_head": "Talking Head",
+                }
+                _pref_name = _fmt_map.get(_preferred, _preferred)
+                cip_parts.append(
+                    f"СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ: аудитория автора лучше реагирует на {_pref_name} "
+                    f"(score {_top[0][1]:.1f}/1.0) — отдавай предпочтение этому формату "
+                    "при генерации идей и плана, если нет веской причины использовать другой."
+                )
         if cip.get("active_launch"):
             cip_parts.append("АКТИВНЫЙ ЗАПУСК: контент должен поддерживать прогрев")
         # For planner — inject backlog
@@ -794,7 +823,21 @@ async def generate(update: Update, user_id: int,
     except Exception:
         pass
 
-    sys_prompt = base_sys + voice_ctx + niche_ctx + cip_ctx
+    # Platform-native language filter for video/carousel tools
+    platform_filter = ""
+    try:
+        from config import PLATFORM_NATIVE_REELS, PLATFORM_NATIVE_CAROUSEL, MIRA_KNOWLEDGE_LAYER
+        if spec.key in ("reels_short", "talking_head", "cartoon", "reels_adapt"):
+            platform_filter = PLATFORM_NATIVE_REELS
+        elif spec.key in ("carousel",):
+            platform_filter = PLATFORM_NATIVE_CAROUSEL
+        # Knowledge layer for all tools
+        knowledge_layer = MIRA_KNOWLEDGE_LAYER
+    except Exception:
+        platform_filter = ""
+        knowledge_layer = ""
+
+    sys_prompt = base_sys + voice_ctx + niche_ctx + cip_ctx + platform_filter + knowledge_layer
 
     try:
         photos = [[b64, mime] for b64, mime in session.get("photos", [])]
@@ -948,6 +991,96 @@ async def _send_result(update: Update, result: str,
         )
         if why_result and why_result.strip():
             await send(update, why_result.strip(), parse_mode="Markdown")
+    except Exception:
+        pass
+
+    # CONTENT RHYTHM ANALYSIS — track emotional register, warn on fatigue
+    try:
+        from config import (
+            CONTENT_EMOTION_EXTRACT_SYSTEM, CONTENT_RHYTHM_WARNING,
+            _EMOTION_ALTERNATIVES
+        )
+        from db import get_cip, save_cip as _sc
+        _emotion_raw = await llm.complete(
+            CONTENT_EMOTION_EXTRACT_SYSTEM, result[:600], temperature=0.0
+        )
+        _emotion = _emotion_raw.strip().lower().split()[0] if _emotion_raw else ""
+        if _emotion:
+            _cip = await get_cip(user_id)
+            _rhythm = _cip.get("emotional_rhythm", [])
+            _rhythm.append(_emotion)
+            _rhythm = _rhythm[-10:]  # keep last 10
+            _cip["emotional_rhythm"] = _rhythm
+            await _sc(user_id, _cip)
+            # Warn if last 5 are all same emotion
+            if len(_rhythm) >= 5 and len(set(_rhythm[-5:])) == 1:
+                _alt = _EMOTION_ALTERNATIVES.get(_emotion, "другой угол")
+                await send(
+                    update,
+                    CONTENT_RHYTHM_WARNING.format(emotion=_emotion, suggestion=_alt),
+                    parse_mode="Markdown",
+                )
+    except Exception:
+        pass
+
+    # MICRO-LAUNCH DETECTION (#28) — triggered when warmup completes AND
+    # active_launch was True before this generation (user was in a launch).
+    # Detect by CIP state, not by text content (text always contains Day 3 offer).
+    try:
+        if spec.key == "warmup":
+            from config import MICRO_LAUNCH_FOLLOWUP
+            from db import get_cip, save_cip as _sc2
+            _cip2 = await get_cip(user_id)
+            # Only fire if user was explicitly in an active launch
+            if _cip2.get("active_launch"):
+                # Warmup generation = launch sequence written = mark completed
+                _cip2["active_launch"] = False
+                _cip2["launch_completed_at"] = str(__import__("datetime").date.today())
+                await _sc2(user_id, _cip2)
+                await asyncio.sleep(1.5)
+                await send(update, MICRO_LAUNCH_FOLLOWUP, parse_mode="Markdown")
+    except Exception:
+        pass
+
+    # WARMUP OBJECTION TRACKER (#22) — extract which objections are neutralized,
+    # flag any uncovered ones from the primary objection stored in CIP
+    try:
+        if spec.key == "warmup":
+            from db import get_cip, save_cip as _sc3
+            _cip3 = await get_cip(user_id)
+            _primary_obj = _cip3.get("audience_primary_objection", "")
+            # Extract objections mentioned in the result
+            _obj_extract_sys = (
+                "Из текста прогрева извлеки список возражений которые нейтрализуются в контенте. "
+                "Возражение нейтрализуется когда текст прямо или косвенно снимает сомнение. "
+                "Ответь ТОЛЬКО JSON: {\"neutralized\": [\"возражение1\", \"возражение2\"]}"
+            )
+            _obj_raw = await llm.complete(_obj_extract_sys, result[:1000], temperature=0.0)
+            import json as _json
+            _obj_start = _obj_raw.find("{")
+            _obj_end = _obj_raw.rfind("}") + 1
+            if _obj_start >= 0 and _obj_end > _obj_start:
+                _obj_data = _json.loads(_obj_raw[_obj_start:_obj_end])
+                _neutralized = _obj_data.get("neutralized", [])
+                _cip3["warmup_neutralized_objections"] = _neutralized
+                await _sc3(user_id, _cip3)
+                # Warn if primary objection seems uncovered
+                if _primary_obj and _neutralized:
+                    _covered = any(
+                        _primary_obj.lower()[:20] in obj.lower()
+                        for obj in _neutralized
+                    )
+                    if not _covered:
+                        await send(
+                            update,
+                            f"⚠️ *Обрати внимание:* главное возражение «{_primary_obj[:80]}» "
+                            "явно не нейтрализовано в прогреве. "
+                            "Хочешь добавить это в один из дней?",
+                            parse_mode="Markdown",
+                            reply_markup=kb(
+                                ["➕ Добавить в прогрев|ag_edit_add_proof", "← Пропустить|menu_main"]
+                            ),
+                        )
     except Exception:
         pass
 

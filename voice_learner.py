@@ -141,6 +141,20 @@ async def mark_approved(user_id: int, agent_key: str, content: str) -> None:
     await _cache_set(user_id, _APPROVED_KEY, cached)
     logger.debug("Voice approved: user=%s agent=%s", user_id, agent_key)
 
+    # 3. Update content_format_affinity in CIP — voice approval is a strong
+    # signal that this format resonates with the creator's audience.
+    # Score drifts toward 1.0 with each approval (EMA with alpha=0.3).
+    try:
+        from db import get_cip, save_cip
+        _cip = await get_cip(user_id)
+        _affinity = _cip.get("content_format_affinity", {})
+        _prev = _affinity.get(agent_key, 0.5)
+        _affinity[agent_key] = round(_prev * 0.7 + 1.0 * 0.3, 3)  # EMA toward 1.0
+        _cip["content_format_affinity"] = _affinity
+        await save_cip(user_id, _cip)
+    except Exception as _e:
+        logger.debug("format_affinity update failed uid=%s: %s", user_id, _e)
+
 
 async def add_voice_note(user_id: int, note: str) -> bool:
     """
@@ -351,9 +365,22 @@ async def handle_voice_feedback_yes(
 async def handle_voice_feedback_no(
     update, user_id: int, result_id: int
 ) -> None:
-    """User rejected — ask for one correction note."""
-    from db import kv_set
+    """User rejected — ask for one correction note, downvote format affinity."""
+    from db import kv_set, get_result_by_id, get_cip, save_cip
     from utils import send, kb
+
+    # Downvote format affinity for rejected agent_key
+    try:
+        r = await get_result_by_id(user_id, result_id)
+        if r:
+            _cip = await get_cip(user_id)
+            _affinity = _cip.get("content_format_affinity", {})
+            _prev = _affinity.get(r["agent_key"], 0.5)
+            _affinity[r["agent_key"]] = round(_prev * 0.7 + 0.0 * 0.3, 3)  # EMA toward 0
+            _cip["content_format_affinity"] = _affinity
+            await save_cip(user_id, _cip)
+    except Exception as _e:
+        logger.debug("format_affinity downvote failed: %s", _e)
 
     await kv_set(user_id, _FEEDBACK_STEP_KEY, str(result_id), ttl=600)
     await send(
