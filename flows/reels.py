@@ -268,9 +268,10 @@ async def rs_gen(update: Update, user_id: int, topic: str) -> None:
     await save_agent_session(user_id, _RS_KEY, s)
     await _save_rs_snapshot(user_id, s)  # persist across session clears
 
+    result_id = 0
     try:
-        await save_result(user_id, "reels_short", "Хуки для рилса",
-                          f"Тема: {topic}\n\n{headlines}")
+        result_id = await save_result(user_id, "reels_short", "Хуки для рилса",
+                                      f"Тема: {topic}\n\n{headlines}") or 0
     except Exception as e:
         logger.warning(f"save_result rs failed: {e}")
 
