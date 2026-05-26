@@ -3,25 +3,46 @@
 
 import type { GenerateInput } from '../types'
 
-interface CreatorProfile { niche?: string; audience?: string; tone?: string }
-interface VoiceProfile   { metaProfile?: any; approvedSamples?: any; styleNotes?: any }
+interface CreatorProfile {
+  id?: number
+  userId?: number
+
+  niche?: string | null
+  audience?: string | null
+  tone?: string | null
+  goals?: string | null
+  platform?: string | null
+
+  createdAt?: Date
+  updatedAt?: Date
+}
+
+interface VoiceProfile {
+  metaProfile?: any
+  approvedSamples?: any
+  styleNotes?: any
+}
 
 interface BuildPromptParams {
-  toolKey:        string
-  input:          GenerateInput
-  creatorProfile?: CreatorProfile
-  voiceProfile?:  VoiceProfile
-  isRegen?:       boolean
+  toolKey: string
+  input: GenerateInput
+
+  creatorProfile?: CreatorProfile | null
+  voiceProfile?: VoiceProfile | null
+
+  isRegen?: boolean
   originalContent?: string
 }
 
 interface BuildRefinePromptParams {
-  action:         string
-  toolKey:        string
+  action: string
+  toolKey: string
   currentContent: string
-  metadata?:      Record<string, string>
-  creatorProfile?: CreatorProfile
-  voiceProfile?:  VoiceProfile
+
+  metadata?: Record<string, string>
+
+  creatorProfile?: CreatorProfile | null
+  voiceProfile?: VoiceProfile | null
 }
 
 // ── Profile context builder ────────────────────────────────────────────────────
