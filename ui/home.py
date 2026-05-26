@@ -121,40 +121,27 @@ async def show_home(update: Update, user_id: int) -> None:
         from db import get_user_name
         _uname = await get_user_name(user_id)
 
-        lines = []
+        lines = ["📊 *Твой прогресс*\n"]
 
         # ── Шапка: стрик ──────────────────────────────────────────────────────
         if streak >= 7:
-            lines.append(f"🔥🔥 *{streak} дней подряд* — это уже привычка!")
+            lines.append(f"🔥 Стрик: *{streak} дней подряд* — это уже привычка!")
         elif streak >= 3:
-            lines.append(f"🔥 *{streak} дня подряд* — ты в ритме!")
+            lines.append(f"🔥 Стрик: *{streak} дня подряд*")
         elif streak >= 1:
-            lines.append(f"📅 {streak} {'день' if streak == 1 else 'дня'} подряд")
+            lines.append(f"🔥 Стрик: *{streak} {'день' if streak == 1 else 'дней'} подряд*")
 
         # ── Блок 1: материалы ─────────────────────────────────────────────────
-        from ui.progress_bar import materials_count
-        mat_bar = materials_count(total)
-        lines.append(f"\n✅ {mat_bar}")
+        lines.append(f"✅ Создано материалов: *{total}*")
 
-        # ── Блок 2: стиль — единый нарратив через _voice_level_label ─────────
-        bar   = _voice_bar_emoji(voice_sig)
-        level = _voice_level_label(voice_sig)
-
+        # ── Блок 2: стиль — формат как в show_stats ───────────────────────────
         if voice_sig == 0:
-            lines.append(
-                f"🎤 *Твой стиль:* {bar}\n"
-                "_Оцени результат — и я начну запоминать как ты пишешь_"
-            )
+            lines.append("🎤 Твой стиль: _ещё не изучен_")
         elif voice_sig < 5:
-            left = 5 - voice_sig
-            lines.append(
-                f"🎤 *Твой стиль:* {bar} {voice_sig}/5 — {level}\n"
-                f"_ещё {left} {'оценка' if left == 1 else 'оценки'}, и начну попадать стабильно_"
-            )
-        elif voice_sig < 10:
-            lines.append(f"🎤 *Твой стиль:* {bar} — {level}")
+            bar = "▓" * voice_sig + "░" * (5 - voice_sig)
+            lines.append(f"🎤 Твой стиль: [{bar}] {voice_sig}/5 — учусь")
         else:
-            lines.append(f"🎤 *Твой стиль:* {bar} — *{level}* 🎯")
+            lines.append(f"🎤 Твой стиль: *пишу как ты* ({voice_sig} примеров) 🎯")
 
         # ── Блок 3: последний результат ───────────────────────────────────────
         if results:
@@ -168,6 +155,7 @@ async def show_home(update: Update, user_id: int) -> None:
 
         # ── CTA ───────────────────────────────────────────────────────────────
         lines.append(f"\n{menu_prompt(name=_uname)}")
+
 
         await send(
             update,
