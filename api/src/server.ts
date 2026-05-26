@@ -13,7 +13,7 @@ import { errorHandler } from './middleware/errorHandler'
 import { logger } from './utils/logger'
 
 const app = Fastify({
-  logger: false,   // используем pino напрямую
+  logger: false,
   trustProxy: true,
 })
 
@@ -23,9 +23,27 @@ async function bootstrap() {
     contentSecurityPolicy: false,
   })
 
+  // CORS: разрешаем Telegram Mini App и любой origin в dev-режиме
+  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) ?? []
+
   await app.register(fastifyCors, {
-    origin: process.env.ALLOWED_ORIGINS?.split(',') ?? ['http://localhost:3000'],
+    origin: (origin, cb) => {
+      // Нет origin (curl, сервер-к-серверу) — разрешаем
+      if (!origin) return cb(null, true)
+      // Telegram не передаёт origin, но на случай если передаёт
+      if (origin.startsWith('https://t.me') || origin.startsWith('https://web.telegram.org')) {
+        return cb(null, true)
+      }
+      // Явно заданные разрешённые origins
+      if (allowedOrigins.includes(origin)) return cb(null, true)
+      // В dev-режиме разрешаем всё
+      if (process.env.NODE_ENV !== 'production') return cb(null, true)
+
+      cb(new Error(`CORS: origin ${origin} not allowed`), false)
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-bot-secret'],
   })
 
   await app.register(fastifyRateLimit, {
@@ -33,7 +51,6 @@ async function bootstrap() {
     max: 120,
     timeWindow: '1 minute',
     keyGenerator: (req) => {
-      // rate-limit по user_id из JWT, иначе по IP
       const token = req.headers.authorization?.split(' ')[1]
       if (token) {
         try {
@@ -57,6 +74,26 @@ async function bootstrap() {
     } catch (err) {
       reply.send(err)
     }
+  })
+
+  // ── Request logging hook ──────────────────────────────────────────────────
+  app.addHook('onRequest', async (req) => {
+    if (req.url === '/health') return
+    logger.info({
+      method: req.method,
+      url: req.url,
+      ip: req.ip,
+      ua: req.headers['user-agent']?.slice(0, 80),
+    }, `→ ${req.method} ${req.url}`)
+  })
+
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.url === '/health') return
+    logger.info({
+      method: req.method,
+      url: req.url,
+      statusCode: reply.statusCode,
+    }, `← ${req.method} ${req.url} ${reply.statusCode}`)
   })
 
   // ── Routes ────────────────────────────────────────────────────────────────
