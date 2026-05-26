@@ -28,7 +28,7 @@ from config import (
 from handlers.commands import (
     cmd_start, cmd_menu, cmd_clear, cmd_reset, cmd_subscribe, cmd_support, cmd_admin,
 )
-from handlers.messages import handle_text, handle_voice, handle_photo
+from handlers.messages import handle_text, handle_voice, handle_photo, handle_document
 from handlers.callbacks import callback
 
 logging.basicConfig(
@@ -67,6 +67,7 @@ def build_app() -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE,                   handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO,                   handle_photo))
+    app.add_handler(MessageHandler(filters.Document.IMAGE,          handle_document))
 
     # Callbacks
     app.add_handler(CallbackQueryHandler(callback))

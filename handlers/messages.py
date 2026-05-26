@@ -1,5 +1,12 @@
 """
-handlers/messages.py — текст, голос, фото.
+handlers/messages.py — текст, голос, фото, документы-изображения.
+
+Изменения v2:
+- handle_photo: распознаёт режим collecting_posts (обучение голосу через скрины)
+- handle_document: обрабатывает изображения присланные как файл
+- extract_text_from_image: OCR через GPT-4o (vision_describe)
+- handle_post_collection: накопление постов для обучения голосу (до 10 штук)
+- finalize_voice_learning: запуск анализа после набора нужного количества
 """
 import asyncio
 import base64
@@ -236,7 +243,182 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _route(update, ctx, user_id, normalized)
 
 
+# ── Image OCR helpers ─────────────────────────────────────────────────────────
+
+_POST_COLLECTION_KEY = "__collecting_posts__"
+
+async def extract_text_from_image(b64: str) -> str:
+    """
+    Извлекает текст с изображения через GPT-4o (vision_describe).
+    Используется для OCR скриншотов постов при обучении голосу.
+    """
+    from config import IMAGE_OCR_PROMPT
+    try:
+        result = await vision_describe(
+            [(b64, "image/jpeg")],
+            question=IMAGE_OCR_PROMPT,
+            model_key="gpt4",
+        )
+        return result.strip()
+    except Exception as e:
+        logger.error(f"extract_text_from_image error: {e}")
+        return ""
+
+
+async def _download_photo_as_base64(update: Update) -> str | None:
+    """Скачивает фото из сообщения и возвращает base64."""
+    try:
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
+        content = await file.download_as_bytearray()
+        return base64.b64encode(content).decode()
+    except Exception as e:
+        logger.error(f"_download_photo_as_base64 error: {e}")
+        return None
+
+
+async def handle_post_collection(update: Update, user_id: int, session: dict) -> None:
+    """
+    Обрабатывает одно фото/текст в режиме сбора постов для обучения голосу.
+    Накапливает до target_count единиц, затем запускает анализ.
+    """
+    collected: list = session.get("collected", [])
+    target = session.get("target_count", 10)
+
+    if update.message.photo:
+        b64 = await _download_photo_as_base64(update)
+        if b64:
+            collected.append({"type": "image", "b64": b64})
+    elif update.message.text:
+        text = (update.message.text or "").strip()
+        if text and text.lower() not in ("всё", "все", "готово", "стоп", "хватит"):
+            collected.append({"type": "text", "content": text})
+
+    count = len(collected)
+    session["collected"] = collected
+
+    # Команда завершения или набрали нужное количество
+    finish_words = ("всё", "все", "готово", "стоп", "хватит")
+    user_text = (update.message.text or "").strip().lower()
+    if count >= target or (update.message.text and user_text in finish_words):
+        await kv_del(user_id, _POST_COLLECTION_KEY)
+        await update.message.reply_text(
+            f"✅ Собрала {count} постов — анализирую твой голос... Это займёт минуту 🔍"
+        )
+        asyncio.create_task(finalize_voice_learning(collected, user_id, update))
+    else:
+        await kv_set(user_id, _POST_COLLECTION_KEY,
+                     json.dumps(session, ensure_ascii=False), ttl=3600)
+        remaining = target - count
+        await update.message.reply_text(
+            f"✅ {count}/{target} — давай ещё!\n"
+            f"_Осталось примерно {remaining}. Или напиши «Готово» чтобы завершить._",
+            parse_mode="Markdown",
+        )
+
+
+async def finalize_voice_learning(collected: list, user_id: int, update: Update) -> None:
+    """
+    Извлекает текст из скриншотов, передаёт в voice_learner для анализа голоса.
+    Сохраняет результаты в voice_signals в PostgreSQL.
+    """
+    texts = []
+    for item in collected:
+        if item.get("type") == "image":
+            b64 = item.get("b64", "")
+            if b64:
+                extracted = await extract_text_from_image(b64)
+                if extracted:
+                    texts.append(extracted)
+        elif item.get("type") == "text":
+            content = item.get("content", "").strip()
+            if content:
+                texts.append(content)
+
+    if not texts:
+        await update.message.reply_text(
+            "Не смогла прочитать тексты с изображений 😔 Попробуй прислать их текстом."
+        )
+        return
+
+    combined = "\n\n---\n\n".join(texts)
+
+    try:
+        from voice_learner import handle_voice_note_learning
+        await handle_voice_note_learning(update, user_id, combined)
+    except Exception as e:
+        logger.error(f"finalize_voice_learning error: {e}")
+        await update.message.reply_text(
+            "Посты собрала, но что-то пошло не так при анализе. Попробуй ещё раз 🔁"
+        )
+
+
 # ── Photo handler ──────────────────────────────────────────────────────────────
+
+async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обрабатывает документы-изображения (когда пользователь шлёт фото как файл).
+    Поддерживаемые MIME: image/jpeg, image/png, image/webp, image/gif.
+    """
+    user_id = update.effective_user.id
+    doc = update.message.document
+    if not doc:
+        return
+
+    mime = doc.mime_type or ""
+    if not mime.startswith("image/"):
+        # Не изображение — игнорируем (или можно добавить другую обработку)
+        await update.message.reply_text(
+            "Я умею читать только изображения. Пришли файл в формате JPG, PNG или WebP 🖼"
+        )
+        return
+
+    state = await get_user_state(user_id)
+    if not has_access(state):
+        await show_paywall(update, user_id, state)
+        return
+
+    lock = await _get_user_lock(user_id)
+    if lock.locked():
+        return
+    async with lock:
+        # Режим сбора постов?
+        raw_session = await kv_get(user_id, _POST_COLLECTION_KEY)
+        if raw_session:
+            session = json.loads(raw_session)
+            try:
+                file = await doc.get_file()
+                content = await file.download_as_bytearray()
+                b64 = base64.b64encode(content).decode()
+                session["collected"].append({"type": "image", "b64": b64})
+            except Exception as e:
+                logger.error(f"handle_document download error: {e}")
+            await handle_post_collection(update, user_id, session)
+            return
+
+        # Универсальный анализ
+        caption = (update.message.caption or "").strip()
+        try:
+            file = await doc.get_file()
+            content = await file.download_as_bytearray()
+            b64 = base64.b64encode(content).decode()
+        except Exception as e:
+            logger.error(f"handle_document get_file error: {e}")
+            await send(update, "Не смогла открыть файл — попробуй ещё раз 🔁")
+            return
+
+        status = await update.effective_chat.send_message("Смотрю на изображение...")
+        try:
+            result = await vision_describe([(b64, mime)], question=caption)
+        except Exception as e:
+            logger.error(f"handle_document vision error: {e}")
+            await safe_delete(status)
+            await send(update, "Изображение не открылось — попробуй ещё раз 🔁",
+                       reply_markup=main_menu_kb())
+            return
+        await safe_delete(status)
+        await send(update, f"🖼 {result}", reply_markup=kb(["← Меню|menu_main"]))
+
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -251,6 +433,13 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info(f"[photo dedup] user={user_id} — запрос уже в обработке")
         return
     async with lock:
+        # ── Режим сбора постов для обучения голосу ────────────────────────
+        raw_session = await kv_get(user_id, _POST_COLLECTION_KEY)
+        if raw_session:
+            session = json.loads(raw_session)
+            await handle_post_collection(update, user_id, session)
+            return
+
         caption = (update.message.caption or "").strip()
 
         # Активный generic агент
