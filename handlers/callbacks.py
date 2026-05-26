@@ -39,7 +39,8 @@ from flows.misc import (
 from ui.menu import show_menu, main_menu_kb, more_menu_kb, model_kb
 from ui.paywall import show_paywall
 from ui.cabinet import show_cabinet
-from handlers.messages import _detect_active_agent, _typing_loop
+from handlers.messages import _detect_active_agent
+from utils import typing_loop
 from prompt_editor import (
     pe_menu, pe_show_category, pe_view_prompt,
     pe_start_edit, pe_save_text, pe_reset, get_category_for_slug,
@@ -72,8 +73,33 @@ async def callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _dispatch(update, ctx, query, user_id, data)
 
 
-async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
+# ── BUG #2 / #4 FIX: centralized stale-callback guards ───────────────────────
 
+async def _rs_stale_guard(user_id: int, query) -> bool:
+    """Returns True if the reels callback is stale (session absent or no result)."""
+    from db import get_agent_session as _g
+    s = await _g(user_id, _RS_KEY)
+    if not s or not s.get("last_result"):
+        await query.answer("⚠️ Эта кнопка устарела. Начни новую тему.", show_alert=True)
+        return True
+    return False
+
+
+async def _car_stale_guard(user_id: int, query) -> bool:
+    """Returns True if the carousel callback is stale (session absent or no result)."""
+    from db import get_agent_session as _g
+    s = await _g(user_id, _CAR_KEY)
+    if not s or not s.get("last_result"):
+        await query.answer("⚠️ Эта кнопка устарела. Начни новую карусель.", show_alert=True)
+        return True
+    return False
+
+
+async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
+    """
+    Главный роутер callback-кнопок.
+    Stale callback protection: если действие уже неактуально — вежливый ответ.
+    """
     # ── Подписка / Кабинет ────────────────────────────────────────────────────
 
     if data in ("sub_cabinet", "sub_menu"):
@@ -184,10 +210,10 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         return
 
     if data == "menu_main":
-        # НЕ очищаем сессии — пользователь может вернуться к незавершённой работе
         from ui.home import show_home
+        # Пробуем отредактировать текущее сообщение — убираем кнопки
         try:
-            await query.message.delete()
+            await query.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
         await show_home(update, user_id)
@@ -373,23 +399,33 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         return
 
     if data == "rs_regen":
+        # Сбрасываем completed_actions при перегенерации
+        from db import get_agent_session as _gas, save_agent_session as _sas
+        _s = await _gas(user_id, _RS_KEY)
+        if _s:
+            _s["completed_actions"] = []
+            await _sas(user_id, _RS_KEY, _s)
         await rs_regen(update, user_id)
         return
 
     # Панель доработки хуков
     if data == "rs_edit_softer":
+        if await _rs_stale_guard(user_id, query): return
         await rs_edit_softer(update, user_id)
         return
 
     if data == "rs_edit_bolder":
+        if await _rs_stale_guard(user_id, query): return
         await rs_edit_bolder(update, user_id)
         return
 
     if data == "rs_edit_top5":
+        if await _rs_stale_guard(user_id, query): return
         await rs_edit_top5(update, user_id)
         return
 
     if data == "rs_edit_style":
+        if await _rs_stale_guard(user_id, query): return
         await rs_edit_style(update, user_id)
         return
 
@@ -398,12 +434,14 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         return
 
     if data.startswith("rs_style_"):
+        if await _rs_stale_guard(user_id, query): return
         style_key = data[9:]
         await rs_apply_style(update, user_id, style_key)
         return
 
     # Описание к выбранному хуку
     if data == "rs_pick_for_desc":
+        if await _rs_stale_guard(user_id, query): return
         await rs_pick_for_desc(update, user_id)
         return
 
@@ -453,30 +491,37 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     # ── Панель доработки карусели ─────────────────────────────────────────────
 
     if data == "car_edit_headline":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_headline(update, user_id)
         return
 
     if data == "car_edit_add_slide":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_add_slide(update, user_id)
         return
 
     if data == "car_edit_shorten":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_shorten(update, user_id)
         return
 
     if data == "car_edit_softer":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_softer(update, user_id)
         return
 
     if data == "car_edit_bolder":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_bolder(update, user_id)
         return
 
     if data == "car_edit_trigger":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_trigger(update, user_id)
         return
 
     if data == "car_edit_format":
+        if await _car_stale_guard(user_id, query): return
         await carousel.car_edit_format(update, user_id)
         return
 
@@ -727,8 +772,7 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         status = await update.effective_chat.send_message(
             f"{emoji} Генерирую быстрый результат — *{name}*...", parse_mode="Markdown"
         )
-        _stop = asyncio.Event()
-        _tt   = asyncio.create_task(_typing_loop(update.effective_chat, _stop))
+        _tt   = asyncio.create_task(typing_loop(update.effective_chat))
         try:
             profile = await get_profile(user_id)
             result  = await oneshot_generate(agent_key, orig_text, profile)
@@ -736,16 +780,14 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             logger.error(f"intent_oneshot error: {e}")
             result = None
         finally:
-            _stop.set()
             _tt.cancel()
-            await safe_delete(status)
+        await safe_delete(status)
         if result:
             deep_cb = (
                 "flow_reels_short" if agent_key == "reels_short" else
                 "flow_carousel"    if agent_key == "carousel"    else
                 f"agent_start_{agent_key}"
             )
-            # Сохраняем oneshot в БД как полноценный результат
             _result_id = 0
             try:
                 from db import save_result as _sr
@@ -755,28 +797,37 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
             await kv_set(user_id, "__oneshot_draft__",
                          json.dumps({"agent": agent_key, "name": name, "content": result},
-                                    ensure_ascii=False))
+                                    ensure_ascii=False),
+                         ttl=1800)  # BUG #7 FIX: explicit 30-min TTL
 
-            # Результат с действиями в одной клавиатуре
-            await send(update, result, parse_mode="Markdown",
-                       reply_markup=kb(
-                           [f"⚡ Детальнее|{deep_cb}",
-                            f"💾 Сохранить|oneshot_save_{agent_key}"],
-                           ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
-                           ["← Меню|menu_main"],
-                       ))
-
-            # Voice feedback
+            # Голосовой прогресс
+            _hint = ""
             if _result_id:
-                from voice_learner import voice_feedback_kb as _vfkb, get_voice_stats as _gvs
-                from ui.progress_bar import voice_progress_short as _vps
                 try:
+                    from voice_learner import get_voice_stats as _gvs
+                    from ui.progress_bar import voice_progress_short as _vps
                     _vs   = await _gvs(user_id)
                     _hint = _vps(_vs.get("total_signals", 0))
                 except Exception:
-                    _hint = ""
-                await send(update, f"Звучит как твой голос?{_hint}",
-                           parse_mode="Markdown", reply_markup=_vfkb(_result_id))
+                    pass
+
+            # Всё в одном сообщении с combined_kb
+            if _result_id and _hint is not None:
+                from voice_learner import voice_feedback_kb as _vfkb
+                _combined_kb = _vfkb(_result_id, extra_rows=[
+                    [f"⚡ Детальнее|{deep_cb}", f"💾 Сохранить|oneshot_save_{agent_key}"],
+                    ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
+                    ["← Меню|menu_main"],
+                ])
+                await send(update, f"{result}\n\n_Звучит как твой голос?{_hint}_",
+                           parse_mode="Markdown", reply_markup=_combined_kb)
+            else:
+                await send(update, result, parse_mode="Markdown",
+                           reply_markup=kb(
+                               [f"⚡ Детальнее|{deep_cb}", f"💾 Сохранить|oneshot_save_{agent_key}"],
+                               ["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"],
+                               ["← Меню|menu_main"],
+                           ))
 
             # Конверсионный триггер: только 3-я генерация в триале
             try:

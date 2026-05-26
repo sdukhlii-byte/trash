@@ -35,6 +35,9 @@ from config import build_reels_short_headline_system, build_reels_short_desc_sys
 
 logger = logging.getLogger(__name__)
 
+
+
+
 _RS_KEY = "reels_short_flow"
 
 # ── Авто-выбор стиля хуков под профиль ───────────────────────────────────────
@@ -85,14 +88,40 @@ _THINKING_MSGS = [
 
 # ── Утилиты ───────────────────────────────────────────────────────────────────
 
-def _edit_panel_kb():
-    """Панель доработки после генерации хуков."""
-    return kb(
-        ["📝 Написать описание к хуку|rs_pick_for_desc",  "🔄 Перегенерировать|rs_regen"],
-        ["🎨 Мягче|rs_edit_softer",                        "🔥 Провокационнее|rs_edit_bolder"],
-        ["✂️ Топ-5 лучших|rs_edit_top5",                  "💡 Другой стиль|rs_edit_style"],
-        ["🔁 Новая тема|flow_reels_short",                  "← Меню|menu_main"],
-    )
+def _edit_panel_kb(result_id: int = 0, completed: set | None = None):
+    """
+    Панель доработки хуков.
+    completed: завершённые действия — исчезают из клавиатуры.
+    Например, после 'Топ-5' эта кнопка больше не показывается.
+    """
+    done = completed or set()
+    rid  = f"_{result_id}" if result_id else ""
+    rows = []
+
+    row1 = []
+    # BUG #8 FIX: do NOT append rid to these two buttons — their handlers use exact
+    # string matching ("rs_pick_for_desc", "rs_regen") and ignore result_id anyway.
+    row1.append("📝 Описание к хуку|rs_pick_for_desc")
+    row1.append("🔄 Перегенерировать|rs_regen")
+    rows.append(row1)
+
+    row2 = []
+    if "softer" not in done:
+        row2.append(f"🎨 Мягче|rs_edit_softer{rid}")
+    if "bolder" not in done:
+        row2.append(f"🔥 Провокационнее|rs_edit_bolder{rid}")
+    if row2:
+        rows.append(row2)
+
+    row3 = []
+    if "top5" not in done:
+        row3.append(f"✂️ Топ-5|rs_edit_top5{rid}")
+    row3.append(f"💡 Стиль|rs_edit_style{rid}")
+    if row3:
+        rows.append(row3)
+
+    rows.append([f"🔁 Новая тема|flow_reels_short", f"← Меню|menu_main"])
+    return kb(*rows)
 
 
 def _style_choice_kb():
@@ -214,10 +243,10 @@ async def rs_gen(update: Update, user_id: int, topic: str) -> None:
     except Exception:
         pass
 
-    await _send_result(update, user_id, headlines, topic, s)
+    await _send_result(update, user_id, headlines, topic, s, result_id=result_id)
 
 
-async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict) -> None:
+async def _send_result(update, user_id: int, headlines: str, topic: str, s: dict, result_id: int = 0) -> None:
     """Отправляет хуки + панель доработки."""
     await send(
         update,
@@ -289,13 +318,18 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
     )
 
     status = await update.effective_chat.send_message("Переписываю...")
+    import asyncio as _aio
+    _tt = _aio.create_task(typing_loop(update.effective_chat))
     try:
         new_result = await complete(system, instruction, temperature=0.8, max_tokens=1500)
     except Exception as e:
         logger.error(f"[reels] edit {edit_key} failed: {e}")
+        _tt.cancel()
         await safe_delete(status)
         await send(update, "Не получилось — попробуй ещё раз 🔁", reply_markup=_edit_panel_kb())
         return
+    finally:
+        _tt.cancel()
 
     await safe_delete(status)
 
@@ -303,8 +337,11 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
         await send(update, "Пустой ответ — попробуй ещё раз.", reply_markup=_edit_panel_kb())
         return
 
-    # Сохраняем новую версию
+    # Сохраняем новую версию + трекаем завершённые действия
+    _rs_completed = set(s.get("completed_actions", []))
+    _rs_completed.add(edit_key)
     s["last_result"] = new_result
+    s["completed_actions"] = list(_rs_completed)
     await save_agent_session(user_id, _RS_KEY, s)
 
     try:
@@ -318,7 +355,7 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
         f"🎬 *Хуки — тема:* _{topic}_\n\n{new_result}",
         parse_mode="Markdown",
     )
-    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb())
+    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb(completed=_rs_completed))
 
 
 async def rs_edit_softer(update: Update, user_id: int) -> None:
@@ -372,23 +409,50 @@ async def rs_pick_for_desc(update: Update, user_id: int) -> None:
 
 
 async def _parse_hook_choice(text: str, headlines: str) -> str:
-    """Извлекает текст хука по номеру или возвращает текст как есть."""
+    """
+    Извлекает чистый текст хука по номеру или из скопированного текста.
+    Обрабатывает форматы: обычный список, top5 с пояснениями, хуки в кавычках.
+    """
     chosen = text.strip()
     if chosen.isdigit():
         lines = []
         for line in headlines.split("\n"):
             clean = re.sub(r"[\*_`~]+", "", line).strip()
             if re.match(r"^\d+[\.)\s]\s*\S", clean):
-                lines.append(re.sub(r"^\d+[\.)\s]\s*", "", clean).strip())
+                hook_raw = re.sub(r"^\d+[\.)\s]\s*", "", clean).strip()
+                # Убираем пояснение после " — " (top5 режим: "хук — потому что...")
+                hook_raw = re.split(r"\s+—\s+", hook_raw)[0].strip()
+                # Убираем кавычки-ёлочки и обычные
+                hook_raw = hook_raw.strip("«»\"'")
+                if hook_raw:
+                    lines.append(hook_raw)
         n = int(chosen)
         if 1 <= n <= len(lines):
             return lines[n - 1]
+        return chosen  # число вне диапазона
+    # Пользователь скопировал текст — чистим
+    chosen = re.sub(r"^\d+[\.)\s]\s*", "", chosen).strip()
+    chosen = re.split(r"\s+—\s+", chosen)[0].strip()
+    chosen = chosen.strip("«»\"'")
     return chosen
 
 
 async def rs_hook_chosen_for_desc(update: Update, user_id: int, text: str, s: dict) -> None:
     """Пользователь выбрал хук — переходим к деталям для описания."""
     chosen = await _parse_hook_choice(text, s.get("last_result", ""))
+
+    # Защита: если chosen — просто цифра (парсинг не нашёл текст), просим повторить
+    if chosen.isdigit():
+        total_hooks = len([l for l in s.get("last_result", "").split("\n")
+                          if re.match(r"^\d+[\.\)\s]", l.strip())])
+        await send(
+            update,
+            f"Не нашла хук с номером {chosen}. "
+            f"Хуков в списке: {total_hooks}. Напиши число от 1 до {total_hooks} или скопируй текст хука.",
+            reply_markup=kb(["← Назад|rs_edit_back", "← Меню|menu_main"]),
+        )
+        return
+
     s["chosen"] = chosen
     s["step"]   = "await_desc_details"
     await save_agent_session(user_id, _RS_KEY, s)

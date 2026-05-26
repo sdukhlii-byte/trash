@@ -115,6 +115,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /menu — открывает главное меню.
+    НЕ сбрасывает активные сессии — пользователь может вернуться к незавершённому.
+    """
     user_id = update.effective_user.id
     state = await get_user_state(user_id)
     if state == UserState.NEW:
@@ -123,7 +127,8 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not has_access(state):
         await show_paywall(update, user_id, state)
         return
-    await show_menu(update, user_id)
+    from ui.home import show_home
+    await show_home(update, user_id)
 
 
 async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

@@ -38,6 +38,8 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+
+
 _CAR_KEY = "carousel_flow"
 
 # Системный промпт для автовыбора формата+триггера под профиль
@@ -121,15 +123,42 @@ _GEN_MSGS = [
 
 # ── Утилиты ───────────────────────────────────────────────────────────────────
 
-def _edit_panel_kb():
-    """Панель доработки после генерации."""
-    return kb(
-        ["✏️ Другой заголовок|car_edit_headline",  "🔄 Другой формат|car_edit_format"],
-        ["💪 Усилить триггер|car_edit_trigger",     "➕ Добавить слайд|car_edit_add_slide"],
-        ["🎨 Мягче|car_edit_softer",                "🔥 Жёстче|car_edit_bolder"],
-        ["✂️ Сократить|car_edit_shorten"],
-        ["🔁 Новая карусель|flow_carousel",          "← Меню|menu_main"],
-    )
+def _edit_panel_kb(completed: set | None = None):
+    """
+    Панель доработки карусели.
+    completed: завершённые действия — исчезают из клавиатуры.
+    """
+    done = completed or set()
+    rows = []
+
+    row1 = []
+    if "headline" not in done:
+        row1.append("✏️ Заголовок|car_edit_headline")
+    row1.append("🔄 Формат|car_edit_format")
+    if row1:
+        rows.append(row1)
+
+    row2 = []
+    if "trigger_stronger" not in done:
+        row2.append("💪 Триггер|car_edit_trigger")
+    if "add_slide" not in done:
+        row2.append("➕ Слайд|car_edit_add_slide")
+    if row2:
+        rows.append(row2)
+
+    row3 = []
+    if "tone_softer" not in done:
+        row3.append("🎨 Мягче|car_edit_softer")
+    if "tone_bolder" not in done:
+        row3.append("🔥 Жёстче|car_edit_bolder")
+    if row3:
+        rows.append(row3)
+
+    if "shorten" not in done:
+        rows.append(["✂️ Сократить|car_edit_shorten"])
+
+    rows.append(["🔁 Новая карусель|flow_carousel", "← Меню|menu_main"])
+    return kb(*rows)
 
 
 def _trigger_choice_kb():
@@ -212,12 +241,15 @@ async def car_topic_received(update: Update, user_id: int, topic: str, s: dict) 
         f"Ниша: {profile.get('niche', '')}\n"
         f"Аудитория: {profile.get('audience', '')}"
     )
+    _tt1 = asyncio.create_task(typing_loop(update.effective_chat))
     try:
         car_int  = protect(user_id, await get_prompt(user_id, "carousel_interviewer", _QUICK_INTERVIEW_SYSTEM))
         first_q  = await complete(car_int, f"{ctx}\n\nЗадай первый вопрос.", temperature=0.4)
     except Exception as e:
         logger.error(f"[carousel] first_q failed: {e}")
         first_q = "Расскажи одну реальную историю или пример из своего опыта по этой теме."
+    finally:
+        _tt1.cancel()
 
     await safe_delete(status)
 
@@ -262,11 +294,13 @@ async def car_interview_step(update: Update, user_id: int, text: str, s: dict) -
         return
 
     # Задаём второй вопрос
+    _tt2 = asyncio.create_task(typing_loop(update.effective_chat))
     try:
         car_int  = protect(user_id, await get_prompt(user_id, "carousel_interviewer", _QUICK_INTERVIEW_SYSTEM))
         next_msg = await chat(ih, system=car_int, temperature=0.4)
     except Exception as e:
         logger.error(f"[carousel] interview step failed: {e}")
+        _tt2.cancel()
         await send(
             update,
             "Связь прервалась — ответь ещё раз 🔁",
@@ -276,6 +310,8 @@ async def car_interview_step(update: Update, user_id: int, text: str, s: dict) -
             ),
         )
         return
+    finally:
+        _tt2.cancel()
 
     # Если модель сама решила что готова
     if "[ready]" in next_msg.lower():
@@ -469,10 +505,12 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
     )
 
     status = await update.effective_chat.send_message("Переписываю...")
+    _tt3 = asyncio.create_task(typing_loop(update.effective_chat))
     try:
         new_result = await complete_long(system, instruction, model_key="claude", temperature=0.8)
     except Exception as e:
         logger.error(f"[carousel] edit {edit_key} failed: {e}")
+        _tt3.cancel()
         await safe_delete(status)
         await send(
             update,
@@ -480,6 +518,8 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
             reply_markup=_edit_panel_kb(),
         )
         return
+    finally:
+        _tt3.cancel()
 
     await safe_delete(status)
 
@@ -487,8 +527,11 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
         await send(update, "Пустой ответ — попробуй ещё раз.", reply_markup=_edit_panel_kb())
         return
 
-    # Сохраняем новую версию
+    # Сохраняем новую версию + трекаем завершённые
+    _car_completed = set(s.get("completed_actions", []))
+    _car_completed.add(edit_key)
     s["last_result"] = new_result
+    s["completed_actions"] = list(_car_completed)
     await save_agent_session(user_id, _CAR_KEY, s)
 
     try:
@@ -514,7 +557,7 @@ async def _apply_edit(update: Update, user_id: int, edit_key: str) -> None:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
-    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb())
+    await send(update, "Ещё докрутить?", reply_markup=_edit_panel_kb(completed=_car_completed))
 
 
 async def car_edit_headline(update: Update, user_id: int) -> None:

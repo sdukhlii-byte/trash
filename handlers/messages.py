@@ -60,18 +60,6 @@ async def _get_user_lock(user_id: int) -> asyncio.Lock:
 
 # ── Typing loop ────────────────────────────────────────────────────────────────
 
-async def _typing_loop(chat_obj, stop_event: asyncio.Event) -> None:
-    try:
-        while not stop_event.is_set():
-            try:
-                await chat_obj.send_action("typing")
-            except Exception:
-                pass
-            await asyncio.sleep(4)
-    except asyncio.CancelledError:
-        pass
-
-
 # ── Text handler ───────────────────────────────────────────────────────────────
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -168,41 +156,47 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await show_paywall(update, user_id, state)
         return
 
-    # Мгновенная реакция на голосовое — показывает что услышала
-    try:
-        from ui.media import set_reaction
-        msg = update.message
-        asyncio.create_task(
-            set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, "👀")
-        )
-    except Exception:
-        pass
+    # BUG #6 FIX: acquire per-user lock to prevent concurrent voice+text race
+    lock = await _get_user_lock(user_id)
+    if lock.locked():
+        logger.info(f"[voice dedup] user={user_id} — запрос уже в обработке")
+        return
+    async with lock:
+        # Мгновенная реакция на голосовое — показывает что услышала
+        try:
+            from ui.media import set_reaction
+            msg = update.message
+            asyncio.create_task(
+                set_reaction(msg.get_bot(), msg.chat_id, msg.message_id, "👀")
+            )
+        except Exception:
+            pass
 
-    status = await update.message.reply_text("Слушаю... 🎙")
-    try:
-        file     = await update.message.voice.get_file()
-        ogg_data = await file.download_as_bytearray()
-        text     = await transcribe(bytes(ogg_data))
-    except Exception as e:
-        logger.error(f"Whisper failed: {e}")
+        status = await update.message.reply_text("Слушаю... 🎙")
+        try:
+            file     = await update.message.voice.get_file()
+            ogg_data = await file.download_as_bytearray()
+            text     = await transcribe(bytes(ogg_data))
+        except Exception as e:
+            logger.error(f"Whisper failed: {e}")
+            await safe_delete(status)
+            await send(update, "Голосовые сообщения пока недоступны. Напиши текстом 🙏")
+            return
+
         await safe_delete(status)
-        await send(update, "Голосовые сообщения пока недоступны. Напиши текстом 🙏")
-        return
 
-    await safe_delete(status)
+        if not text or not text.strip():
+            await send(update, "Не расслышала — попробуй ещё раз.")
+            return
 
-    if not text or not text.strip():
-        await send(update, "Не расслышала — попробуй ещё раз.")
-        return
-
-    clean = text.strip()
-    await kv_set(user_id, "__voice_pending__", clean, ttl=3600)
-    await send(
-        update,
-        f"🎙 _Расшифровала:_\n\n{clean}\n\nОтправить как запрос?",
-        parse_mode="Markdown",
-        reply_markup=kb(["✅ Отправить|voice_send"], ["❌ Отмена|voice_cancel"]),
-    )
+        clean = text.strip()
+        await kv_set(user_id, "__voice_pending__", clean, ttl=3600)
+        await send(
+            update,
+            f"🎙 _Расшифровала:_\n\n{clean}\n\nОтправить как запрос?",
+            parse_mode="Markdown",
+            reply_markup=kb(["✅ Отправить|voice_send"], ["❌ Отмена|voice_cancel"]),
+        )
 
 
 # ── Photo handler ──────────────────────────────────────────────────────────────
@@ -214,31 +208,37 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await show_paywall(update, user_id, state)
         return
 
-    caption = (update.message.caption or "").strip()
+    # BUG #6 FIX: acquire per-user lock to prevent concurrent photo+text race
+    lock = await _get_user_lock(user_id)
+    if lock.locked():
+        logger.info(f"[photo dedup] user={user_id} — запрос уже в обработке")
+        return
+    async with lock:
+        caption = (update.message.caption or "").strip()
 
-    # Активный generic агент
-    agent_key = await _detect_active_agent(user_id)
-    spec = ag.get_spec(agent_key) if agent_key else None
-    if spec:
-        s = await ag.get_agent_session_safe(user_id, spec.key)
-        if s and s.get("step") in ("await_photos", "interview", "initial"):
-            await ag.handle_photo(update, user_id, spec)
+        # Активный generic агент
+        agent_key = await _detect_active_agent(user_id)
+        spec = ag.get_spec(agent_key) if agent_key else None
+        if spec:
+            s = await ag.get_agent_session_safe(user_id, spec.key)
+            if s and s.get("step") in ("await_photos", "interview", "initial"):
+                await ag.handle_photo(update, user_id, spec)
+                return
+
+        # Карусель во время интервью
+        car = await get_agent_session(user_id, _CAR_KEY)
+        if car and car.get("step") == "interview":
+            await _car_handle_photo(update, user_id, car, caption)
             return
 
-    # Карусель во время интервью
-    car = await get_agent_session(user_id, _CAR_KEY)
-    if car and car.get("step") == "interview":
-        await _car_handle_photo(update, user_id, car, caption)
-        return
+        # Рилс-коротышка
+        rs = await get_agent_session(user_id, _RS_KEY)
+        if rs and rs.get("step") in ("await_topic", "await_desc_details"):
+            await _rs_handle_photo(update, user_id, rs, caption)
+            return
 
-    # Рилс-коротышка
-    rs = await get_agent_session(user_id, _RS_KEY)
-    if rs and rs.get("step") in ("await_topic", "await_desc_details"):
-        await _rs_handle_photo(update, user_id, rs, caption)
-        return
-
-    # Универсальный vision-анализ
-    await _handle_photo_universal(update, user_id, caption)
+        # Универсальный vision-анализ
+        await _handle_photo_universal(update, user_id, caption)
 
 
 async def _handle_photo_universal(update: Update, user_id: int, caption: str) -> None:
@@ -581,8 +581,7 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     system    = protect(user_id, await get_prompt(user_id, "chat", _chat_base_with_ctx))
     history.append({"role": "user", "content": text})
 
-    _stop = asyncio.Event()
-    _typing_task = asyncio.create_task(_typing_loop(update.effective_chat, _stop))
+    _typing_task = asyncio.create_task(typing_loop(update.effective_chat))
     try:
         reply = await chat(history, system=system, model_key=model_key, temperature=0.4)
     except Exception as e:
@@ -591,8 +590,7 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                    reply_markup=kb(["🔁 Повторить|mode_chat", "← Меню|menu_main"]))
         return
     finally:
-        _stop.set()
-        _typing_task.cancel()
+            _typing_task.cancel()
 
     await save_message(user_id, "user",      text,  model_key, "chat")
     await save_message(user_id, "assistant", reply, model_key, "chat")

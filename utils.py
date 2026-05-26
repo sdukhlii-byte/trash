@@ -154,3 +154,30 @@ async def edit(query, text: str, **kwargs) -> None:
         except TelegramError as e:
             logger.error(f"edit error: {e}")
             return
+
+
+# ── Typing indicator ──────────────────────────────────────────────────────────
+
+import asyncio as _asyncio
+
+
+async def typing_loop(chat) -> None:
+    """
+    Унифицированный typing indicator.
+    Использовать везде через create_task + cancel в finally.
+
+    Пример:
+        _tt = asyncio.create_task(typing_loop(update.effective_chat))
+        try:
+            result = await some_llm_call()
+        finally:
+            _tt.cancel()
+    """
+    try:
+        while True:
+            await chat.send_action("typing")
+            await _asyncio.sleep(4)
+    except _asyncio.CancelledError:
+        pass
+    except Exception:
+        pass  # Telegram rate limit или другая ошибка — тихо игнорируем

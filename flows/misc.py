@@ -25,13 +25,22 @@ from db import (
 from llm import complete
 from security import protect
 from prompt_editor import get_prompt
-from utils import send, kb, safe_delete
+from utils import send, kb, safe_delete, typing_loop
 from config import (
     QUICK_IDEAS_SYSTEM, REFINE_SYSTEM, REGEN_SYSTEM,
     PLANNER_IDEAS_SYSTEM, DAILY_DIGEST_SYSTEM,
 )
 
 logger = logging.getLogger(__name__)
+async def _typing_loop(chat) -> None:
+    """Typing indicator пока идёт LLM-вызов."""
+    try:
+        while True:
+            await chat.send_action("typing")
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass
+
 
 # ── Keys ──────────────────────────────────────────────────────────────────────
 _QI_KEY      = "quick_ideas_flow"
@@ -152,6 +161,13 @@ async def qi_generate(update: Update, user_id: int, niche: str) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def refine_start(update: Update, user_id: int, result_id: int = 0) -> None:
+    # BUG #5 FIX: inform user if they're refining a freshly regenerated result
+    try:
+        from db import kv_get as _kvg
+        _just_regen = await _kvg(user_id, "__regen_just_ran__")
+    except Exception:
+        _just_regen = None
+
     if result_id:
         r = await get_result_by_id(user_id, result_id)
     else:
@@ -168,11 +184,13 @@ async def refine_start(update: Update, user_id: int, result_id: int = 0) -> None
         "agent_name": r["agent_name"],
     })
     preview = r["content"][:300]
+    _regen_note = "\n\n⚠️ _Ты только что перегенерировал(а) — дорабатываю новый вариант._" if _just_regen else ""
     await send(
         update,
         f"✏️ *Доработка*\n\n*{r['agent_name']}:*\n_{preview}..._\n\n"
         "Что изменить? Напиши инструкцию:\n"
-        "_«Сделай короче», «Добавь юмора», «Усиль CTA»..._",
+        "_«Сделай короче», «Добавь юмора», «Усиль CTA»..._"
+        f"{_regen_note}",
         parse_mode="Markdown",
         reply_markup=kb(["← Меню|menu_main"]),
     )
@@ -188,7 +206,11 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
         voice_ctx  = await build_voice_context(user_id)
         refine_sys = protect(user_id, await get_prompt(user_id, "refine", REFINE_SYSTEM))
         refine_sys = refine_sys + voice_ctx
-        result = await complete(refine_sys, prompt, temperature=0.7)
+        _tt = asyncio.create_task(_typing_loop(update.effective_chat))
+        try:
+            result = await complete(refine_sys, prompt, temperature=0.7)
+        finally:
+            _tt.cancel()
     except Exception as e:
         logger.error(f"[refine] error: {e}")
         result = None
@@ -237,6 +259,12 @@ async def regen_last(update: Update, user_id: int) -> None:
         await send(update, "Нет материалов. Создай что-нибудь сначала.",
                    reply_markup=kb(["← Меню|menu_main"]))
         return
+    # BUG #5 FIX: mark that regen just ran so refine_start can inform the user
+    try:
+        from db import kv_set as _kvs
+        await _kvs(user_id, "__regen_just_ran__", "1", ttl=10)
+    except Exception:
+        pass
     await regen_by_id(update, user_id, results[0]["id"])
 
 
@@ -247,6 +275,8 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
         return
     prompt = f"Оригинал:\n{r['content']}"
     status = await update.effective_chat.send_message("Пишу другой вариант — ищу другой угол...")
+    import asyncio as _aio
+    _tt = _aio.create_task(typing_loop(update.effective_chat))
     try:
         from voice_learner import build_voice_context
         voice_ctx  = await build_voice_context(user_id)
@@ -256,6 +286,8 @@ async def regen_by_id(update: Update, user_id: int, result_id: int) -> None:
     except Exception as e:
         logger.error(f"[regen] error: {e}")
         result = None
+    finally:
+        _tt.cancel()
     await safe_delete(status)
     if not result:
         await send(update, "Не вышло с первого раза — все данные на месте, жми 🔁",
@@ -456,11 +488,14 @@ async def planner_gen_week(update: Update, user_id: int) -> None:
         f"Даты: {', '.join(dates)}\n\nСоставь план на 7 дней."
     )
     status = await update.effective_chat.send_message("Составляю план на неделю...")
+    _tt = asyncio.create_task(_typing_loop(update.effective_chat))
     try:
         result = await complete(protect(user_id, PLANNER_IDEAS_SYSTEM), prompt, temperature=0.85)
     except Exception as e:
         logger.error(f"[planner] week error: {e}")
         result = None
+    finally:
+        _tt.cancel()  # BUG #1 FIX: always cancel, even on exception
     await safe_delete(status)
     if not result:
         await send(update, "Связь прервалась — жми ещё раз 🔁",
@@ -565,7 +600,11 @@ async def pregen_digest(user_id: int) -> str | None:
         f"Дата: {today}"
     )
     try:
-        result = await complete(DAILY_DIGEST_SYSTEM, prompt, temperature=0.85)
+        _tt = asyncio.create_task(_typing_loop(update.effective_chat))
+        try:
+            result = await complete(DAILY_DIGEST_SYSTEM, prompt, temperature=0.85)
+        finally:
+            _tt.cancel()
         if result and result.strip():
             await _cache_digest(user_id, result)
             return result

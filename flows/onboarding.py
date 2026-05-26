@@ -24,6 +24,15 @@ from config import QUICK_IDEAS_SYSTEM
 from prompt_editor import get_prompt
 
 logger = logging.getLogger(__name__)
+async def _typing_loop(chat) -> None:
+    """Typing indicator пока идёт LLM-вызов."""
+    try:
+        while True:
+            await chat.send_action("typing")
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass
+
 
 _ONB_STEPS = ["niche", "audience", "tone"]
 
@@ -158,7 +167,11 @@ async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
                 "Только текст поста, без пояснений."
             )
             _sys = protect(user_id, await get_prompt(user_id, "quick_ideas", QUICK_IDEAS_SYSTEM))
-            _preview = await complete(_sys, _prompt, temperature=0.85)
+            _tt_onb = asyncio.create_task(_typing_loop(update.effective_chat))
+            try:
+                _preview = await complete(_sys, _prompt, temperature=0.85)
+            finally:
+                _tt_onb.cancel()
             try:
                 await _status.delete()
             except Exception:

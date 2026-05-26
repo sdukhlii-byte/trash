@@ -31,6 +31,9 @@ from niche_intel import build_niche_context
 
 logger = logging.getLogger(__name__)
 
+
+
+
 _AGENT_PROMPT_SLUGS: dict[str, tuple[str, str]] = {
     "profile":      ("profile_interviewer",     "profile_generator"),
     "stories":      ("stories_interviewer",      "stories_generator"),
@@ -100,16 +103,38 @@ def _get_agent_refine_prompts(agent_key: str) -> dict[str, str]:
     return _AGENT_REFINE_PROMPTS.get(agent_key, _AGENT_REFINE_PROMPTS["_default"])
 
 
-def _agent_edit_panel_kb(spec_key: str) -> object:
-    """Панель доработки после генерации — как в карусели."""
+def _agent_edit_panel_kb(spec_key: str, completed: set | None = None) -> object:
+    """
+    Панель доработки после генерации.
+    completed: множество уже выполненных действий — они исключаются из клавиатуры.
+    Это решает проблему 'кнопка остаётся после выполнения'.
+    """
     from utils import kb as _kb
-    return _kb(
-        ["🎨 Мягче|ag_edit_softer",           "🔥 Жёстче|ag_edit_bolder"],
-        ["✂️ Сократить|ag_edit_shorter",       "➕ Добавить деталь|ag_edit_detail"],
-        ["💪 Усилить CTA|ag_edit_cta"],
-        ["✏️ Доработать свободно|refine_last",  "🔄 Другой вариант|regen_last"],
-        [f"🔁 Заново|agent_restart_{spec_key}", "← Меню|menu_main"],
-    )
+    done = completed or set()
+
+    rows = []
+    row1 = []
+    if "softer" not in done:
+        row1.append("🎨 Мягче|ag_edit_softer")
+    if "bolder" not in done:
+        row1.append("🔥 Жёстче|ag_edit_bolder")
+    if row1:
+        rows.append(row1)
+
+    row2 = []
+    if "shorter" not in done:
+        row2.append("✂️ Сократить|ag_edit_shorter")
+    if "detail" not in done:
+        row2.append("➕ Деталь|ag_edit_detail")
+    if row2:
+        rows.append(row2)
+
+    if "cta" not in done:
+        rows.append(["💪 Усилить CTA|ag_edit_cta"])
+
+    rows.append(["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"])
+    rows.append([f"🔁 Заново|agent_restart_{spec_key}", "← Меню|menu_main"])
+    return _kb(*rows)
 
 # Статусные сообщения с голосом Миры
 _STATUS_THINKING = [
@@ -344,6 +369,7 @@ async def _first_message(update: Update, user_id: int,
     status = await update.effective_chat.send_message(
         _STATUS_THINKING[hash(spec.key) % len(_STATUS_THINKING)]
     )
+    _tt_first = asyncio.create_task(typing_loop(update.effective_chat))
     try:
         first_q = await llm.complete(
             interviewer,
@@ -352,11 +378,14 @@ async def _first_message(update: Update, user_id: int,
         )
     except Exception as e:
         logger.error(f"[{spec.key}] first_message LLM error: {e}")
+        _tt_first.cancel()
         await safe_delete(status)
         await send(update, "Связь прервалась — ответь ещё раз, данные сохранены 🔁",
                    reply_markup=kb([f"🔁 Попробовать снова|agent_restart_{spec.key}",
                                     "← Меню|menu_main"]))
         return
+    finally:
+        _tt_first.cancel()
     await safe_delete(status)
 
     session.update({
@@ -423,14 +452,23 @@ async def _interview_step(update: Update, user_id: int,
 
     ih.append({"role": "user", "content": text[:1500]})
     interviewer = await _resolve_interviewer_custom(user_id, spec)
+
+    # Показываем typing пока идёт LLM-вызов
+    import asyncio as _asyncio
+    _typing_task = _asyncio.create_task(
+        typing_loop(update.effective_chat)
+    )
     try:
         next_msg = await llm.chat(ih, system=interviewer, temperature=0.4)
     except Exception as e:
         logger.error(f"[{spec.key}] interview LLM error: {e}")
         ih.pop()
+        _typing_task.cancel()
         await send(update, "Связь прервалась — ответь ещё раз и продолжим 🔁",
                    reply_markup=kb(["⏭ Пропустить вопросы|agent_skip", "← Меню|menu_main"]))
         return
+    finally:
+        _typing_task.cancel()
 
     ih.append({"role": "assistant", "content": next_msg})
     session["history"] = ih
@@ -809,33 +847,43 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
     Аналог _apply_edit() в carousel.py.
     Вызывается из callbacks.py по ag_edit_* callback_data.
     """
-    # Ищем последнюю активную сессию агента с last_result
-    _s = None
+    # BUG #3 FIX: read the persisted edit session first (it carries completed_actions).
+    # Only fall back to get_results() for the content itself.
+    from db import get_results, kv_get as _kvg
+
     _spec_key = None
-    # Сначала пробуем найти через __ag_edit__ ключи
+    _edit_session = None
+
+    # Step 1: find active agent key
     try:
-        from db import get_redis
-        r = await get_redis()
-        async for _key in r.scan_iter(f"bot:session:{user_id}:__ag_edit_*"):
-            import json as _j
-            _raw = await r.get(_key)
-            if _raw:
-                _candidate = _j.loads(_raw)
-                if _candidate.get("last_result"):
-                    _s = _candidate
-                    _spec_key = _candidate.get("spec_key", "post")
-                    break
+        _active = await _kvg(user_id, "__active_agent__")
+        if _active and _active not in (_RS_KEY, _CAR_KEY):
+            _spec_key = _active
     except Exception:
         pass
 
-    # Fallback: последний результат из БД
-    if not _s or not _s.get("last_result"):
+    # Step 2: read persisted edit session (has completed_actions + last_result)
+    if _spec_key:
         try:
-            from db import get_results
+            _edit_session = await get_agent_session(user_id, f"__ag_edit_{_spec_key}__")
+        except Exception:
+            pass
+
+    # Step 3: if no edit session with content, fall back to DB result
+    _s = None
+    if _edit_session and _edit_session.get("last_result"):
+        _s = _edit_session
+    else:
+        try:
             _recent = await get_results(user_id, limit=1)
             if _recent:
-                _s = {"last_result": _recent[0]["content"], "spec_key": _recent[0]["agent_key"]}
-                _spec_key = _recent[0]["agent_key"]
+                _spec_key = _spec_key or _recent[0]["agent_key"]
+                # Merge: DB content + any completed_actions already persisted in edit session
+                _s = {
+                    "last_result":       _recent[0]["content"],
+                    "spec_key":          _spec_key,
+                    "completed_actions": (_edit_session or {}).get("completed_actions", []),
+                }
         except Exception:
             pass
 
@@ -851,7 +899,6 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
 
     profile = await get_profile(user_id)
     spec    = get_spec(_spec_key)
-
     system = (
         f"Ты — редактор контента. "
         f"Ниша автора: {profile.get('niche', '')}. "
@@ -861,15 +908,21 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
     )
 
     status = await update.effective_chat.send_message("Переписываю...")
+    import asyncio as _aio
+    from utils import typing_loop as _tl
+    _tt = _aio.create_task(_tl(update.effective_chat))
     try:
         from llm import complete_long
         new_result = await complete_long(system, instruction, model_key="claude", temperature=0.8)
     except Exception as e:
         logger.error(f"[agents] apply_edit {edit_key} failed: {e}")
+        _tt.cancel()
         await safe_delete(status)
         _panel = _agent_edit_panel_kb(_spec_key)
         await send(update, "Не получилось — попробуй ещё раз 🔁", reply_markup=_panel)
         return
+    finally:
+        _tt.cancel()
 
     await safe_delete(status)
 
@@ -877,6 +930,10 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
         await send(update, "Пустой ответ — попробуй ещё раз.",
                    reply_markup=_agent_edit_panel_kb(_spec_key))
         return
+
+    # Трекинг завершённых действий — эта кнопка исчезнет из следующей клавиатуры
+    _completed = set(_s.get("completed_actions", []))
+    _completed.add(edit_key)
 
     # Обновляем сохранённый last_result
     _s["last_result"] = new_result
@@ -904,4 +961,4 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
             await asyncio.sleep(0.3)
             await send(update, chunk, parse_mode="Markdown")
 
-    await send(update, "Ещё докрутить?", reply_markup=_agent_edit_panel_kb(_spec_key))
+    await send(update, "Ещё докрутить?", reply_markup=_agent_edit_panel_kb(_spec_key, _completed))
