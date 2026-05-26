@@ -234,7 +234,38 @@ async def refine_start(update: Update, user_id: int, result_id: int = 0) -> None
 
 async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> None:
     original = s.get("original", "")
-    prompt = f"Оригинальный текст:\n{original}\n\nЗадача: {instruction}"
+
+    # Build strategic context block for REFINE_SYSTEM
+    _strat_ctx = ""
+    try:
+        from db import get_cip as _gcip
+        _cip = await _gcip(user_id)
+        _parts = []
+        _agent_name = s.get("agent_name", "")
+        if _agent_name:
+            _parts.append(f"Инструмент: {_agent_name}")
+        _funnel = _cip.get("current_funnel_phase", "")
+        if _funnel:
+            _parts.append(f"Этап воронки: {_funnel}")
+        _trust = _cip.get("audience_trust_level")
+        if _trust:
+            _parts.append(f"Доверие аудитории: {_trust}/10")
+        # Warmup day detection
+        _wday = s.get("warmup_day", 0)
+        if not _wday and "ДЕНЬ 1" in original[:500]:
+            _wday = 1
+        elif not _wday and "ДЕНЬ 2" in original[:500]:
+            _wday = 2
+        elif not _wday and "ДЕНЬ 3" in original[:500]:
+            _wday = 3
+        if _wday:
+            _parts.append(f"warmup_day: {_wday}")
+        if _parts:
+            _strat_ctx = "\n\nСТРАТЕГИЧЕСКИЙ КОНТЕКСТ МАТЕРИАЛА:\n" + "\n".join(_parts)
+    except Exception:
+        pass
+
+    prompt = f"Оригинальный текст:\n{original}\n\nЗадача: {instruction}{_strat_ctx}"
     status = await update.effective_chat.send_message("Дорабатываю — держи...")
     try:
         from voice_learner import build_voice_context
@@ -596,6 +627,17 @@ async def planner_gen_week(update: Update, user_id: int) -> None:
         await send(update, "Связь прервалась — жми ещё раз 🔁",
                    reply_markup=kb(["← Планировщик|planner_show"]))
         return
+
+    # Mark backlog ideas that were injected as used
+    try:
+        from db import get_content_backlog, mark_backlog_used
+        _backlog = await get_content_backlog(user_id)
+        for _entry in _backlog:
+            if not _entry.get("used") and _entry.get("idea", "") in result:
+                await mark_backlog_used(user_id, _entry["idea"])
+    except Exception:
+        pass
+
     await send(update, f"📅 *План на неделю:*\n\n{result}", parse_mode="Markdown",
                reply_markup=kb(["📅 Мой планировщик|planner_show", "← Меню|menu_main"]))
 

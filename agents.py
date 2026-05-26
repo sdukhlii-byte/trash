@@ -679,6 +679,15 @@ async def generate(update: Update, user_id: int,
         result = "⚠️ Пустой ответ от модели. Запусти агента заново."
 
     await clear_agent_session(user_id, spec.key)
+
+    # Track generated topic in CIP for novelty filtering in future brainstorms
+    try:
+        from db import add_recent_topic as _art
+        _topic_hint = session.get("initial", "")[:80] or spec.name
+        await _art(user_id, _topic_hint)
+    except Exception:
+        pass
+
     await _send_result(update, result, spec, user_id)
 
 
@@ -834,6 +843,14 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
                     _s = await get_agent_session(user_id, spec.key) or {}
                     _s["last_result"] = _content
                     _s["spec_key"]    = spec.key
+                    # Persist strategic context so apply_edit can pass it to REFINE_SYSTEM
+                    try:
+                        from db import get_cip as _gcip
+                        _cip = await _gcip(user_id)
+                        _s["funnel_stage"]    = _cip.get("current_funnel_phase", "awareness")
+                        _s["audience_trust"]  = _cip.get("audience_trust_level", 5)
+                    except Exception:
+                        pass
                     await save_agent_session(user_id, f"__ag_edit_{spec.key}__", _s)
                 except Exception:
                     pass
