@@ -806,12 +806,12 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
     if data == "daily_push_time":
         from db import save_agent_session as _sas
-        from utils import send as _send, kb as _kb
+        import utils as _utils
         await _sas(user_id, "daily_push_time_flow", {"step": "await_time"})
-        await _send(update,
-                    "⏰ Напиши время для утреннего пуша:\n_Например: 9:00 или 8:30_",
-                    parse_mode="Markdown",
-                    reply_markup=_kb(["← Назад|daily_push_menu"]))
+        await _utils.send(update,
+                          "⏰ Напиши время для утреннего пуша:\n_Например: 9:00 или 8:30_",
+                          parse_mode="Markdown",
+                          reply_markup=_utils.kb(["← Назад|daily_push_menu"]))
         return
 
     if data == "daily_push_test":
@@ -1040,15 +1040,15 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                     _es["completed_actions"] = []
                     await save_agent_session(user_id, f"__ag_edit_{_active}__", _es)
                     from agents import _agent_edit_panel_kb
-                    from utils import send, kb
+                    import utils as _u
                     _panel_kb, _ = _agent_edit_panel_kb(_active)
-                    await send(update, f"{_es['original_result']}\n\n_🔙 Восстановлен первый результат._",
+                    await _u.send(update, f"{_es['original_result']}\n\n_🔙 Восстановлен первый результат._",
                                parse_mode="Markdown", reply_markup=_panel_kb)
                     return
         except Exception:
             pass
-        from utils import send, kb
-        await send(update, "Не удалось восстановить — оригинал не найден.", reply_markup=kb(["← Меню|menu_main"]))
+        import utils as _u
+        await _u.send(update, "Не удалось восстановить — оригинал не найден.", reply_markup=_u.kb(["← Меню|menu_main"]))
         return
 
     if data.startswith("ag_edit_"):
