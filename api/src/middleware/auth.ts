@@ -6,11 +6,16 @@ import { cache } from '../db/redis'
 import { logger } from '../utils/logger'
 import type { AuthTokenPayload } from '../types'
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!
-
 // ── Telegram initData verification ───────────────────────────────────────────
 
 export function verifyTelegramInitData(initData: string): Record<string, string> | null {
+  const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
+
+  if (!BOT_TOKEN) {
+    logger.error('TELEGRAM_BOT_TOKEN is not set! Check environment variables on Render.')
+    return null
+  }
+
   try {
     const params = new URLSearchParams(initData)
     const hash = params.get('hash')
@@ -21,7 +26,6 @@ export function verifyTelegramInitData(initData: string): Record<string, string>
 
     params.delete('hash')
 
-    // Sort params and build check string
     const checkString = Array.from(params.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`)
@@ -38,24 +42,25 @@ export function verifyTelegramInitData(initData: string): Record<string, string>
       .digest('hex')
 
     if (expectedHash !== hash) {
-      logger.warn({
-        expected: expectedHash,
-        got: hash,
-      }, 'verifyTelegramInitData: hash mismatch — check BOT_TOKEN on Render')
+      logger.warn(
+        { expected: expectedHash, got: hash },
+        'verifyTelegramInitData: hash mismatch — BOT_TOKEN on Render likely wrong'
+      )
       return null
     }
 
-    // Check auth_date not older than 24h (skip in dev mode)
+    // Skip auth_date check in non-production (helpful for testing)
     const authDate = parseInt(params.get('auth_date') ?? '0')
     const ageSeconds = Date.now() / 1000 - authDate
     if (process.env.NODE_ENV === 'production' && ageSeconds > 86400) {
-      logger.warn({ ageSeconds }, 'verifyTelegramInitData: initData expired')
+      logger.warn({ ageSeconds }, 'verifyTelegramInitData: initData expired (>24h)')
       return null
     }
 
     const result: Record<string, string> = {}
     params.forEach((v, k) => { result[k] = v })
     return result
+
   } catch (err) {
     logger.error({ err }, 'verifyTelegramInitData: unexpected error')
     return null
@@ -72,7 +77,6 @@ export async function requireAuth(
     await req.jwtVerify()
     const payload = req.user as AuthTokenPayload
 
-    // Touch last_active_at (non-blocking, fire-and-forget)
     prisma.user.update({
       where: { id: payload.userId },
       data: { lastActiveAt: new Date() },
@@ -83,7 +87,7 @@ export async function requireAuth(
   }
 }
 
-// ── Optional auth (for public endpoints that benefit from user context) ───────
+// ── Optional auth ─────────────────────────────────────────────────────────────
 
 export async function optionalAuth(
   req: FastifyRequest,
@@ -94,7 +98,7 @@ export async function optionalAuth(
   } catch {}
 }
 
-// ── Bot-to-API secret auth (for Telegram bot backend calls) ──────────────────
+// ── Bot-to-API secret auth ────────────────────────────────────────────────────
 
 export async function requireBotSecret(
   req: FastifyRequest,
@@ -139,10 +143,7 @@ export async function getUserState(userId: number): Promise<string> {
 async function computeUserState(userId: number): Promise<string> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: {
-      subscription: true,
-      trial: true,
-    },
+    include: { subscription: true, trial: true },
   })
 
   if (!user) return 'new'
@@ -150,15 +151,9 @@ async function computeUserState(userId: number): Promise<string> {
 
   const now = new Date()
 
-  if (user.subscription && user.subscription.expiresAt > now) {
-    return 'subscribed'
-  }
-  if (user.trial && user.trial.expiresAt > now) {
-    return 'trial'
-  }
-  if (user.subscription || user.trial) {
-    return 'expired'
-  }
+  if (user.subscription && user.subscription.expiresAt > now) return 'subscribed'
+  if (user.trial && user.trial.expiresAt > now) return 'trial'
+  if (user.subscription || user.trial) return 'expired'
   return 'onboarded'
 }
 

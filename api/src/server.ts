@@ -18,6 +18,16 @@ const app = Fastify({
 })
 
 async function bootstrap() {
+  // ── Env var sanity check ──────────────────────────────────────────────────
+  const REQUIRED_ENV = ['JWT_SECRET', 'TELEGRAM_BOT_TOKEN', 'DATABASE_URL', 'REDIS_URL']
+  const missing = REQUIRED_ENV.filter(k => !process.env[k])
+  if (missing.length > 0) {
+    logger.error({ missing }, `⛔ Missing required environment variables: ${missing.join(', ')}`)
+    // Don't exit — log clearly and continue so other things still work
+  } else {
+    logger.info('✅ All required env vars present')
+  }
+
   // ── Security ─────────────────────────────────────────────────────────────
   await app.register(fastifyHelmet, {
     contentSecurityPolicy: false,
