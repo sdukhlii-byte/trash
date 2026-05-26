@@ -34,12 +34,19 @@ async def _typing_loop(chat) -> None:
         pass
 
 
-_ONB_STEPS = ["niche", "audience", "tone"]
+_ONB_STEPS = ["niche", "audience", "tone", "push_time"]
 
 _ONB_Q_NICHE = (
-    "С чем работаешь?\n\n"
-    "_Ниша, тема, экспертиза — как есть. "
-    "Фитнес, психология, бизнес, дизайн — или что-то своё._"
+    "Привет! Я Мира — AI продюсер контента.\n\n"
+    "Буду писать посты, рилсы, прогревы и сторис в твоём стиле — "
+    "под твою нишу и аудиторию. Не шаблоны: я учусь на твоих текстах "
+    "и со временем пишу так, что сложно отличить от тебя.\n\n"
+    "Чтобы начать — три быстрых вопроса. "
+    "Это хребет: чем точнее ответишь, тем лучше будет каждый текст.\n\n"
+    "*С чем работаешь и кто твои люди?*\n\n"
+    "_Ниша, тема, аудитория — говори как есть. "
+    "Фитнес, психология, бизнес, дизайн — или своё.\n"
+    "Голосом быстрее — я понимаю живую речь 🎙_"
 )
 
 # ── LLM prompts для умных ack ─────────────────────────────────────────────────
@@ -140,6 +147,33 @@ async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
     await clear_onboarding_state(user_id)
     await invalidate_state_cache(user_id)
 
+    # Планируем утренний пуш если юзер указал время в онбординге
+    _push_data = state.get("data", {})
+    if _push_data.get("push_enabled"):
+        try:
+            from flows.daily_push import get_push_settings, save_push_settings, schedule_daily_push
+            import telegram.ext as _tg_ext
+            # Сохраняем настройки
+            _ps = await get_push_settings(user_id)
+            _ps.update({
+                "enabled": True,
+                "hour": _push_data.get("push_hour_utc", 7),
+                "minute": _push_data.get("push_minute", 0),
+                "hour_local": _push_data.get("push_hour_local", 9),
+            })
+            await save_push_settings(user_id, _ps)
+            # Планируем задание (нужно приложение — берём из контекста через глобальный app)
+            from bot_context import get_app
+            _app = get_app()
+            if _app:
+                await schedule_daily_push(
+                    _app, user_id,
+                    _ps["hour"], _ps["minute"],
+                )
+                logger.info(f"[onboarding] daily push scheduled for uid={user_id}")
+        except Exception as _pe:
+            logger.warning(f"[onboarding] push setup failed uid={user_id}: {_pe}")
+
     new_state = await get_user_state(user_id)
     if has_access(new_state):
         await send(update, "✅ Профиль обновлён.", parse_mode="Markdown")
@@ -201,15 +235,20 @@ async def _finish_onboarding(update: Update, user_id: int, state: dict) -> None:
 
     await send(
         update,
-        f"Это только начало.\n\n"
-        f"Посты, рилсы, карусели, прогревы — в твоём голосе, под твою аудиторию.\n\n"
-        f"*{TRIAL_DAYS} дня бесплатно* — без карты, без подвоха.\n\n"
-        f"_Фрилансер-SMM берёт от 15 000 ₽/мес. Мира — от 2 800 ₽/мес, 24/7._",
+        f"Профиль настроен — я знаю с кем и как работать.\n\n"
+        f"Теперь у тебя есть ежедневный помощник который:\n"
+        f"• пишет в твоём голосе — посты, рилсы, прогревы, сторис\n"
+        f"• утром присылает идею дня под твою нишу\n"
+        f"• учится на твоих текстах и становится точнее с каждым разом\n"
+        f"• понимает голосовые сообщения\n"
+        f"• помнит твой стиль, аудиторию и историю\n\n"
+        f"*{TRIAL_DAYS} дней бесплатно* — без карты.\n\n"
+        f"_Фрилансер-SMM берёт от €150/мес. Мира — от €31/мес, 24/7._",
         parse_mode="Markdown",
         reply_markup=kb(
-            ["🎁 Активировать бесплатный доступ|sub_trial"],
+            ["🎁 Попробовать бесплатно|sub_trial"],
             ["💳 Сразу оформить подписку|sub_pay"],
-            ["ℹ️ Что умею?|sub_about"],
+            ["🎙 Как это работает?|sub_about"],
         ),
     )
 
@@ -227,8 +266,23 @@ async def handle_onboarding(
     if idx >= len(_ONB_STEPS):
         return False
 
+    # Нормализация голосового ввода при онбординге (шаги 0-1 — ниша и аудитория)
+    _input_text = text
+    if idx in (0, 1) and len(text) > 40:
+        try:
+            from voice_normalizer import normalize_voice
+            _nctx = await normalize_voice(text)
+            # Для онбординга берём нормализованный запрос — он чище
+            if _nctx.get("normalized_request"):
+                _input_text = _nctx["normalized_request"]
+                # Если есть creator_context — добавляем к нише
+                if idx == 0 and _nctx.get("creator_context"):
+                    _input_text = f"{_input_text} ({_nctx['creator_context']})"
+        except Exception:
+            pass
+
     data = state.get("data", {})
-    data[_ONB_STEPS[idx]] = text
+    data[_ONB_STEPS[idx]] = _input_text
     state["data"] = data
     state["step"] = idx + 1
     await save_onboarding_state(user_id, state)
@@ -242,7 +296,49 @@ async def handle_onboarding(
         ack = await _smart_ack_audience(user_id, text)
         await send(update, ack)
     elif idx == 2:
-        # Тон → завершение
-        await _finish_onboarding(update, user_id, state)
+        # Тон → вопрос про время пуша + упоминание про примеры постов
+        await send(
+            update,
+            "Почти готово!\n\n"
+            "Есть мощная штука — скинь свои лучшие посты, "
+            "и я буду писать в точности в твоей манере: твои слова, твой ритм, твои обороты.\n\n"
+            "💡 *Совет:* Скриншоты удобнее всего — сделай скрин прямо в Instagram "
+            "и кидай сюда. Не надо ничего копировать, я сама прочитаю текст 📸\n\n"
+            "Это можно сделать в любой момент через меню → Мой стиль.\n\n"
+            "⏰ *В какое время присылать идею дня?*\n\n"
+            "_Каждое утро — конкретная идея поста, формат и одна задача. "
+            "Персонально под твою нишу._\n\n"
+            "Напиши время: `9:00`, `8:30` — или нажми «Пропустить».",
+            parse_mode="Markdown",
+            reply_markup=kb(["⏭ Пропустить|onb_skip_push"]),
+        )
+
+    elif idx == 3:
+        # push_time → парсим и включаем пуш
+        import re as _re
+        m = _re.match(r"(\d{1,2}):(\d{2})", text.strip())
+        if m:
+            hour_local = int(m.group(1))
+            minute = int(m.group(2))
+            tz_offset = 2  # UTC+2 (ES/HR/RS по умолчанию)
+            hour_utc = (hour_local - tz_offset) % 24
+            state["data"]["push_hour_utc"] = hour_utc
+            state["data"]["push_minute"] = minute
+            state["data"]["push_hour_local"] = hour_local
+            state["data"]["push_enabled"] = True
+            await save_onboarding_state(user_id, state)
+            await _finish_onboarding(update, user_id, state)
+        else:
+            # Неверный формат — просим ввести снова
+            await send(
+                update,
+                "Не понял формат. Напиши например: `9:00` или `08:30`\n\n"
+                "_Или нажми «Пропустить» чтобы настроить позже._",
+                parse_mode="Markdown",
+                reply_markup=kb(["⏭ Пропустить|onb_skip_push"]),
+            )
+            state["step"] = 3
+            await save_onboarding_state(user_id, state)
+            return True
 
     return True  # ← единственный return True

@@ -267,7 +267,16 @@ async def refine_do(update: Update, user_id: int, instruction: str, s: dict) -> 
         pass
 
     prompt = f"Оригинальный текст:\n{original}\n\nЗадача: {instruction}{_strat_ctx}"
-    status = await update.effective_chat.send_message("Дорабатываю — держи...")
+
+    # Голосовой статус — живой, в стиле Миры (фаза 2.3)
+    try:
+        from voice_refine_parser import detect_refine_intent, get_refine_status
+        _refine_label = detect_refine_intent(instruction)
+        _status_text = get_refine_status(_refine_label) if _refine_label else "Дорабатываю — держи..."
+    except Exception:
+        _status_text = "Дорабатываю — держи..."
+
+    status = await update.effective_chat.send_message(_status_text)
     try:
         from voice_learner import build_voice_context
         profile    = await get_profile(user_id)
@@ -587,19 +596,38 @@ async def planner_gen_week(update: Update, user_id: int) -> None:
     profile = await get_profile(user_id)
     session = await get_agent_session(user_id, _PLANNER_KEY) or {}
 
-    # If we don't have the week goal yet — ask for it first
+    # If we don't have the week goal yet — ask for it first (unless urgency)
     if not session.get("week_goal"):
-        await save_agent_session(user_id, _PLANNER_KEY, {"step": "await_week_goal"})
-        await send(
-            update,
-            "🗓 *План на неделю*\n\nЧтобы план был стратегическим, а не просто списком — один вопрос:\n\n"
-            "*Что должна почувствовать или сделать аудитория в конце этой недели?*\n\n"
-            "_Например: записаться на консультацию / понять что им нужна твоя услуга / увидеть тебя как эксперта в X_\n\n"
-            "Если сейчас идёт прогрев или запуск — напиши об этом тоже.",
-            parse_mode="Markdown",
-            reply_markup=kb(["⏭ Без цели, просто план|planner_week_skip", "← Планировщик|planner_show"]),
-        )
-        return
+        # Check urgency from intent context
+        urgency = session.get("urgency", False)
+        if not urgency:
+            try:
+                from db import kv_get as _kv_get
+                import json as _json
+                _ctx_raw = await _kv_get(user_id, "__intent_ctx__")
+                if _ctx_raw:
+                    _ctx = _json.loads(_ctx_raw)
+                    urgency = bool(_ctx.get("urgency"))
+            except Exception:
+                pass
+
+        if urgency:
+            # Bypass: генерируем без цели
+            session["week_goal"] = "без конкретной цели — сбалансированный план"
+            session["urgency"] = True
+            await save_agent_session(user_id, _PLANNER_KEY, session)
+        else:
+            await save_agent_session(user_id, _PLANNER_KEY, {"step": "await_week_goal"})
+            await send(
+                update,
+                "🗓 *План на неделю*\n\nЧтобы план был стратегическим, а не просто списком — один вопрос:\n\n"
+                "*Что должна почувствовать или сделать аудитория в конце этой недели?*\n\n"
+                "_Например: записаться на консультацию / понять что им нужна твоя услуга / увидеть тебя как эксперта в X_\n\n"
+                "Если сейчас идёт прогрев или запуск — напиши об этом тоже.",
+                parse_mode="Markdown",
+                reply_markup=kb(["⏭ Без цели, просто план|planner_week_skip", "← Планировщик|planner_show"]),
+            )
+            return
 
     today = datetime.date.today()
     dates = [(today + datetime.timedelta(days=i)).strftime("%d.%m (%a)") for i in range(7)]
@@ -656,6 +684,12 @@ async def planner_add_start(update: Update, user_id: int) -> None:
 async def route_planner_text(update: Update, user_id: int, text: str, s: dict) -> bool:
     step = s.get("step", "")
     if step == "await_week_goal":
+        # Urgency bypass: если флаг выставлен — генерируем план без цели
+        if s.get("urgency"):
+            s["week_goal"] = ""
+            await save_agent_session(user_id, _PLANNER_KEY, s)
+            await planner_gen_week(update, user_id)
+            return True
         # User answered the week goal question — store and generate
         s["week_goal"] = text.strip()
         # Check if launch mentioned
@@ -824,31 +858,74 @@ async def _daily_job(ctx) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def style_menu(update: Update, user_id: int) -> None:
+    from voice_learner import get_voice_stats
     examples = await get_style_examples(user_id)
-    count = len(examples)
+    ex_count = len(examples)
+    vs = await get_voice_stats(user_id)
+    signals = vs.get("total_signals", 0)
+
+    # Статус системы обучения — единый нарратив
+    if signals == 0 and ex_count == 0:
+        status = (
+            "Пока не знаю как ты пишешь.\n\n"
+            "Чем больше дашь — тем точнее буду попадать в твой голос с первого раза."
+        )
+    elif ex_count > 0 and signals < 5:
+        status = (
+            f"Есть {ex_count} {'пример' if ex_count == 1 else 'примера' if ex_count < 5 else 'примеров'} твоих постов "
+            f"и {signals} {'оценка' if signals == 1 else 'оценки' if signals < 5 else 'оценок'} результатов.\n\n"
+            "Хорошее начало. Чем больше оцениваешь результаты — тем точнее становлюсь."
+        )
+    else:
+        status = (
+            f"Примеров постов: *{ex_count}/10*\n"
+            f"Оценок результатов: *{signals}*\n\n"
+            "Чем больше оцениваешь — тем меньше правок нужно."
+        )
+
     text = (
-        f"📝 *Примеры стиля*\n\n"
-        f"Добавлено: *{count}/10*\n\n"
-        "Скинь 2-3 своих поста — агенты будут писать в твоём стиле.\n\n"
-        "_Примеры работают точнее чем «тон» в профиле: агент видит реальные тексты "
-        "и копирует структуру, лексику, ритм._"
+        f"✨ *Мой стиль*\n\n"
+        f"{status}\n\n"
+        "━━━━━━━━━━━━━━━━\n"
+        "*Два способа научить Миру:*\n\n"
+        "📝 *Скинь свои посты* — я буду писать твоими словами, "
+        "твоей структурой, твоим ритмом. Самый быстрый способ.\n\n"
+        "✅ *Оценивай результаты* — после каждого текста нажимай "
+        "«Звучит как я» или «Не совсем + объясни что не так». "
+        "Я запоминаю и корректирую."
     )
-    rows = [["➕ Добавить пример|style_add"]]
-    if count > 0:
-        rows.append(["👁 Посмотреть примеры|style_view", "🗑 Очистить|style_clear"])
-    rows.append(["← Кабинет|sub_cabinet"])
+    rows = [["📝 Добавить свои посты|style_add"]]
+    if ex_count > 0:
+        rows.append(["👁 Посмотреть добавленные|style_view", "🗑 Очистить|style_clear"])
+    rows.append(["← Меню|menu_main"])
     await send(update, text, parse_mode="Markdown", reply_markup=kb(*rows))
 
 
 async def style_add_start(update: Update, user_id: int) -> None:
-    await save_agent_session(user_id, _STYLE_KEY, {"step": "await_example"})
+    """
+    Пункт 4: batch-режим сбора постов через __collecting_posts__ в Redis.
+    Пункт 5: проактивный совет про скриншоты — удобнее чем копировать текст.
+    """
+    import json as _json
+    collecting_session = {
+        "mode": "collecting_posts",
+        "collected": [],
+        "target_count": 10,
+    }
+    await kv_set(user_id, "__collecting_posts__",
+                 _json.dumps(collecting_session, ensure_ascii=False), ttl=3600)
+    await clear_agent_session(user_id, _STYLE_KEY)
     await send(
         update,
-        "✍️ *Добавь пример своего поста*\n\n"
-        "Скопируй и отправь текст поста — лучше целиком.\n"
-        "_Можно добавить до 10 примеров_",
+        "📝 *Обучение голосу*\n\n"
+        "Пришли мне 10 своих лучших постов — скинь все одним за другим, я подожду 🙌\n\n"
+        "💡 *Совет:* Скриншоты удобнее всего — сделай скрин прямо в Instagram "
+        "и кидай сюда. Не надо ничего копировать, я сама прочитаю текст 📸\n\n"
+        "_Можно смешивать: скриншоты + текстом. "
+        "Чем больше примеров — тем точнее буду писать в твоём стиле._\n\n"
+        "Когда пришлёшь все — напиши «Готово» или я остановлюсь сама на 10.",
         parse_mode="Markdown",
-        reply_markup=kb(["← Кабинет|sub_cabinet"]),
+        reply_markup=kb(["⏹ Завершить сбор|style_collect_done", "← Назад|style_menu"]),
     )
 
 
@@ -857,10 +934,12 @@ async def style_save_example(update: Update, user_id: int, text: str) -> None:
     await clear_agent_session(user_id, _STYLE_KEY)
     await send(
         update,
-        f"✅ Пример добавлен! Всего: *{count}/10*\n\n"
-        "_Все агенты теперь учитывают твой стиль письма_",
+        f"✅ Добавила. Всего постов: *{count}/10*\n\n"
+        "_Теперь в каждой генерации буду смотреть на твои тексты "
+        "и писать так же — твоими словами, твоим ритмом._\n\n"
+        "Можно добавить ещё — чем больше примеров, тем точнее.",
         parse_mode="Markdown",
-        reply_markup=kb(["➕ Ещё пример|style_add", "← Меню|menu_main"]),
+        reply_markup=kb(["📝 Добавить ещё|style_add", "← Меню|menu_main"]),
     )
 
 

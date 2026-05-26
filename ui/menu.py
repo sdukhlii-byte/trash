@@ -20,25 +20,26 @@ logger = logging.getLogger(__name__)
 
 
 def main_menu_kb() -> object:
-    """Компактное главное меню — 4 главных + 6 служебных."""
+    """Главное меню — голос первым, форматы по частоте, служебное внизу."""
     return kb(
-        ["✍️ Написать пост|agent_start_post",       "🎬 Рилс + хуки|flow_reels_short"],
-        ["🎠 Карусель|flow_carousel",                "🔥 Прогрев|agent_start_warmup"],
-        ["📸 Сторис|agent_start_stories",            "🎙 Talking Head|agent_start_talking_head"],
-        ["🧩 Ещё инструменты|menu_more"],
-        ["🗂 Мои материалы|my_results",              "💬 Спроси Миру|mode_chat"],
-        ["👤 Кабинет|sub_cabinet",                   "🆘 Поддержка|support"],
+        ["🎙 Говори голосом — пойму и сделаю|voice_hint"],
+        ["✍️ Пост|agent_start_post",         "🎬 Рилс + хуки|flow_reels_short"],
+        ["🎠 Карусель|flow_carousel",         "📸 Сторис|agent_start_stories"],
+        ["🩺 Что буксует в контенте?|diagnostic_start"],
+        ["🧩 Все инструменты|menu_more"],
+        ["✨ Мой стиль|style_menu", "📚 Материалы|my_results", "👤 Кабинет|sub_cabinet"],
     )
 
 
 def more_menu_kb() -> object:
-    """Расширенное меню — все инструменты."""
+    """Расширенное меню — всё что не вошло в главный экран."""
     return kb(
+        ["🔥 Прогрев|agent_start_warmup",            "🎙 Talking Head|agent_start_talking_head"],
         ["🎭 Анимация|agent_start_cartoon",           "🔄 Адаптация рилса|agent_start_reels_adapt"],
-        ["📅 Контент-план TG|agent_start_tg_plan",    "🔎 Разбор конкурента|agent_start_competitor"],
-        ["🔍 Разбор профиля|agent_start_profile",     "🧠 Мозговой штурм|quick_ideas"],
-        ["🗓 Планировщик|planner_show",               "☀️ Утренний брифинг|daily_menu"],
-        ["🩺 Диагностика контента|diagnostic_start",  "📈 Мой прогресс|my_stats"],
+        ["📅 Контент-план TG|agent_start_tg_plan",    "🧠 Мозговой штурм|quick_ideas"],
+        ["🔍 Разбор профиля|agent_start_profile",     "🔎 Разбор конкурента|agent_start_competitor"],
+        ["🗓 Планировщик|planner_show",               "📈 Мой прогресс|my_stats"],
+        ["🔔 Утренние пуши|daily_push_menu"],
         ["← Главное меню|menu_main"],
     )
 

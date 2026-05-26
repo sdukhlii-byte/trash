@@ -157,6 +157,26 @@ def _get_agent_refine_prompts(agent_key: str) -> dict[str, str]:
     return _AGENT_REFINE_PROMPTS.get(agent_key, _AGENT_REFINE_PROMPTS["_default"])
 
 
+def _voice_followup_rows(agent_key: str) -> list:
+    """
+    Возвращает 1-2 умных предложения после результата — вместо generic «← Меню».
+    Основано на _AGENT_SIBLINGS из intent_router (фаза 1.4).
+    """
+    from intent_router import get_agent_suggestions, AGENT_EMOJI, AGENT_NAMES
+    siblings = get_agent_suggestions(agent_key)
+    rows = []
+    for sibling in siblings[:2]:
+        cb = (
+            "flow_reels_short" if sibling == "reels_short" else
+            "flow_carousel"    if sibling == "carousel"    else
+            f"agent_start_{sibling}"
+        )
+        emoji = AGENT_EMOJI.get(sibling, "🤖")
+        name  = AGENT_NAMES.get(sibling, sibling)
+        rows.append([f"{emoji} {name}|{cb}"])
+    return rows
+
+
 def _agent_edit_panel_kb(spec_key: str, completed: set | None = None,
                           refinement_count: int = 0) -> object:
     """
@@ -317,7 +337,8 @@ async def get_agent_session_safe(user_id: int, key: str) -> dict | None:
 
 # ── Engine ─────────────────────────────────────────────────────────────────────
 
-async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
+async def start(update: Update, user_id: int, spec: AgentSpec,
+                urgency: bool = False) -> None:
     # Проверяем доступ ДО создания сессии — нет смысла создавать если нет доступа
     from user_state import get_user_state, has_access
     from ui.paywall import show_paywall
@@ -331,6 +352,7 @@ async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
         "agent_key": spec.key, "step": "initial",
         "initial": "", "history": [], "q_count": 0,
         "picked": "", "extra": {}, "photos": [],
+        "urgency": urgency,
     })
     from db import kv_set as _kv_set
     await _kv_set(user_id, "__active_agent__", spec.key)
@@ -376,6 +398,14 @@ async def handle_text(update: Update, user_id: int,
         await start(update, user_id, spec)
         return
     step = session.get("step", "initial")
+
+    # Urgency-триггер по счётчику: если накопилось достаточно ответов — форсируем генерацию
+    if step == "interview" and not session.get("urgency"):
+        q_count = session.get("q_count", 0)
+        if q_count >= spec.max_q:
+            session["urgency"] = True
+            await save_agent_session(user_id, spec.key, session)
+
     if   step == "initial":     await _first_message(update, user_id, spec, text, session)
     elif step == "interview":   await _interview_step(update, user_id, spec, text, session)
     elif step == "pick":        await _pick_step(update, user_id, spec, text, session)
@@ -612,6 +642,19 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
 
 async def _interview_step(update: Update, user_id: int,
                            spec: AgentSpec, text: str, session: dict) -> None:
+    # Urgency bypass: пользователь хотел результат немедленно — пропускаем интервью
+    if session.get("urgency"):
+        session["initial"] = session.get("initial") or text
+        session["history"].append({"role": "user", "content": text})
+        await save_agent_session(user_id, spec.key, session)
+        if spec.accept_photos:
+            await _offer_photos(update, user_id, spec, session)
+        elif spec.has_pick_step:
+            await _gen_variants(update, user_id, spec, session)
+        else:
+            await generate(update, user_id, spec, session)
+        return
+
     ih = session["history"]
 
     # Off-topic guard: проверяем только если есть предыдущий вопрос от агента
@@ -666,6 +709,32 @@ async def _interview_step(update: Update, user_id: int,
         await send(update, clean_msg, parse_mode="Markdown")
         # Extract strategic signals from interview into CIP before generating
         await _extract_cip_from_interview(user_id, spec.key, session["history"])
+
+        # Pre-generation strategic brief (#7) for heavy tools
+        _BRIEF_TOOLS = ("warmup", "profile", "competitor")
+        if spec.key in _BRIEF_TOOLS:
+            try:
+                _brief_sys = (
+                    "На основе интервью сформулируй стратегический бриф — 3 строки, не больше. "
+                    "Формат:\n"
+                    "🎯 Главная задача: [одно конкретное предложение]\n"
+                    "⚡ Ключевой инсайт: [что важнее всего учесть]\n"
+                    "🛡 Главный риск: [что может пойти не так если не учесть]\n"
+                    "Только бриф. Без вступлений."
+                )
+                _brief_history = session["history"]
+                _brief = await llm.chat(_brief_history, system=_brief_sys, temperature=0.3)
+                if _brief and _brief.strip():
+                    session["pre_brief"] = _brief.strip()
+                    await save_agent_session(user_id, spec.key, session)
+                    await send(update,
+                        f"*Вот как я вижу задачу:*\n\n{_brief.strip()}\n\n"
+                        "Генерирую 🚀",
+                        parse_mode="Markdown"
+                    )
+            except Exception:
+                pass  # Brief is optional — don't block generation on error
+
         if spec.accept_photos:
             await _offer_photos(update, user_id, spec, session)
         elif spec.has_pick_step:
@@ -867,6 +936,15 @@ async def generate(update: Update, user_id: int,
         if cip.get("audience_language_patterns"):
             cip_parts.append(f"Язык аудитории (используй в хуках): {cip['audience_language_patterns']}")
 
+        # #15: Competitor insight → hook differentiation (reels, carousel, qi_start)
+        if cip.get("positioning_statement") and spec.key in ("reels_short", "reels_adapt", "carousel", "qi_start"):
+            cip_parts.append(
+                f"КОНКУРЕНТНЫЙ КОНТЕКСТ ДЛЯ ХУКОВ: если конкурент в нише использует pain-хуки (боль/страх) — "
+                f"попробуй identity-хуки как контрпозиционирование (узнавание + принадлежность). "
+                f"Если конкурент использует авторитет — используй близость и честность. "
+                f"Позиционирование автора уже определено: {cip['positioning_statement']}"
+            )
+
         # Format affinity: surfaces which formats the audience has responded to
         _affinity = cip.get("content_format_affinity", {})
         if _affinity:
@@ -920,6 +998,34 @@ async def generate(update: Update, user_id: int,
         knowledge_layer = ""
 
     sys_prompt = base_sys + voice_ctx + niche_ctx + cip_ctx + platform_filter + knowledge_layer
+
+    # ── Image context: если есть OCR-текст со скриншота — инжектим в промпт ──
+    image_ctx = ""
+    try:
+        from db import kv_get as _kv_get
+        raw_img_ctx = await _kv_get(user_id, "__image_context__")
+        if raw_img_ctx:
+            img_data = __import__("json").loads(raw_img_ctx)
+            extracted = img_data.get("extracted_text", "")
+            intent    = img_data.get("intent", "reference")
+            if extracted:
+                _intent_labels = {
+                    "post_example":    "примеры постов пользователя",
+                    "profile_audit":   "скриншот профиля для разбора",
+                    "competitor_post": "пост конкурента для анализа",
+                    "viral_reel":      "вирусный рилс для адаптации",
+                    "reference":       "дополнительный контекст",
+                }
+                _label = _intent_labels.get(intent, "дополнительный контекст")
+                image_ctx = (
+                    f"\n\nКОНТЕКСТ ИЗ СКРИНШОТА ({_label}):\n"
+                    f"{extracted[:2000]}\n"
+                    f"Учитывай этот текст при генерации."
+                )
+    except Exception as _img_err:
+        logger.debug(f"image_context inject skipped: {_img_err}")
+
+    sys_prompt = sys_prompt + image_ctx
 
     try:
         photos = [[b64, mime] for b64, mime in session.get("photos", [])]
@@ -1335,8 +1441,15 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
     except Exception:
         pass
 
-    # INTER-TOOL SUGGESTIONS (#29) — предлагаем смежный инструмент с сохранением контекста
+    # УМНЫЕ FOLLOW-UPS (фаза 1.4) — 2 контекстных предложения вместо generic меню.
+    # Если запрос был голосовым — используем theme из voice_ctx.
+    # Если нет голосового контекста — fallback на INTER_TOOL_MAP.
     try:
+        import json as _json
+        _voice_ctx_raw = await __import__("db").kv_get(user_id, "__voice_ctx__")
+        _voice_ctx = _json.loads(_voice_ctx_raw) if _voice_ctx_raw else {}
+        _key_theme = _voice_ctx.get("key_theme") or ""
+
         _INTER_TOOL_MAP = {
             "reels_short":  ("carousel",     "Хочешь карусель на эту же тему? Сохраню контекст →", "💎 Карусель на эту тему|inter_tool_carousel"),
             "carousel":     ("reels_short",  "Хочешь Рилс-хук для этой карусели?",                "🎬 Рилс-хук|inter_tool_reels_short"),
@@ -1347,7 +1460,9 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
         }
         if spec.key in _INTER_TOOL_MAP:
             _it_target, _it_text, _it_btn = _INTER_TOOL_MAP[spec.key]
-            # Only show if it's not dismissed already (simple: always show, no state)
+            # Если есть голосовая тема — персонализируем текст
+            if _key_theme:
+                _it_text = f"Хочешь {_it_text.split('Хочешь')[-1].strip()} по теме «{_key_theme}»?"
             await asyncio.sleep(0.8)
             await send(
                 update,
@@ -1474,6 +1589,13 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
                 "Можно добавить конкретный срок если есть логическое основание. "
                 "ЗАЩИЩЕНО: не создавай искусственного дефицита — аудитория на этой стадии чувствует манипуляцию."
             )
+
+    # softer_confirmed: user acknowledged the conversion-stage warning, proceed without another warning
+    if edit_key == "softer_confirmed":
+        instruction = (
+            "Смягчи текст: убери давление и срочность, сделай тон мягче и человечнее. "
+            "ВАЖНО: сохрани суть оффера и его конкретность — меняй только интенсивность, не предмет."
+        )
 
     if edit_key == "softer" and funnel_stage == "conversion":
         # Warn before softening a conversion text

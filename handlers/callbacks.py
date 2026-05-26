@@ -171,19 +171,22 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
 
     if data == "sub_about":
         _about = (
-            "*Вот что умею:*\n\n"
-            "✍️ *Написать за меня* — пост в твоём голосе\n"
-            "🎬 *Хуки для рилса* — заголовки которые останавливают скролл\n"
-            "🎠 *Карусель* — структура + 20 вариантов заголовков\n"
-            "📸 *Сторис* — цепочки которые досматривают до конца\n"
-            "🎙 *Talking Head* — сценарий монолога в кадре\n"
-            "🔥 *Прогрев* — серия которая ведёт к покупке\n"
-            "📅 *Контент-план TG* — на 7-14 дней\n"
-            "🧠 *Мозговой штурм* — 10 идей за секунды\n\n"
-            f"*{TRIAL_DAYS} дня бесплатно* — без карты."
+            "*Как это работает — коротко*\n\n"
+            "1️⃣ *Говоришь голосом или текстом* — что нужно сделать.\n"
+            "   Я понимаю живую речь: «сделай пост про то что клиенты боятся начинать» — готово.\n\n"
+            "2️⃣ *Я пишу в твоём стиле* — не шаблон, а твой голос.\n"
+            "   После каждого текста нажимаешь «Звучит как я ✅» — я запоминаю и становлюсь точнее.\n\n"
+            "3️⃣ *Скидываешь свои старые посты* — и я начинаю писать твоими словами.\n"
+            "   Структура, лексика, ритм — всё твоё.\n\n"
+            "4️⃣ *Утром получаешь идею дня* — конкретную, под твою нишу и аудиторию.\n\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "*Что создаём вместе:*\n"
+            "Посты · Рилсы · Карусели · Прогревы · Сторис · Talking Head\n"
+            "Разбор профиля · Разбор конкурента · Контент-план · Мозговой штурм\n\n"
+            f"*{TRIAL_DAYS} дней бесплатно* — без карты. Отменить в один клик."
         )
         await send(update, _about, parse_mode="Markdown",
-                   reply_markup=kb(["🎁 Активировать|sub_trial"], ["💳 Оформить|sub_pay"]))
+                   reply_markup=kb(["🎁 Попробовать бесплатно|sub_trial"], ["💳 Оформить подписку|sub_pay"]))
         return
 
     if data == "sub_pay":
@@ -248,6 +251,18 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
             ]))
         return
 
+    if data == "voice_hint":
+        await edit(
+            query,
+            "🎙 *Просто запиши голосовое сообщение*\n\n"
+            "Расскажи что хочешь создать — пост, рилс, прогрев, карусель.\n"
+            "Говори как хочешь, хаотично или кратко — Мира разберётся и сделает.\n\n"
+            "_Голосовые работают так же хорошо, как текст — часто лучше._",
+            parse_mode="Markdown",
+            reply_markup=kb(["← Меню|menu_main"]),
+        )
+        return
+
     if data == "menu_main":
         from ui.home import show_home
         # Пробуем отредактировать текущее сообщение — убираем кнопки
@@ -273,15 +288,18 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await clear_all_agent_sessions(user_id)
         await clear_onboarding_state(user_id)
         await kv_set(user_id, "__chat_mode__", "ask_mira", ttl=3600)
-        import random as _rnd
-        _chat_prompts = [
-            "💬 Слушаю — что хочешь обсудить?",
-            "💬 Говори — я здесь.",
-            "💬 Пиши всё что в голове — разберёмся вместе.",
-            "💬 Что на уме? Разберём вместе.",
-        ]
-        await edit(query, _rnd.choice(_chat_prompts),
-                   reply_markup=kb(["← Меню|menu_main"]))
+        await edit(
+            query,
+            "💬 *Свободный чат с Мирой*\n\n"
+            "Здесь можно спросить про стратегию, разобрать идею, "
+            "обсудить что не заходит в контенте — всё что угодно по теме.\n\n"
+            "Говори голосом или пиши — отвечу как продюсер, не как справочник.",
+            parse_mode="Markdown",
+            reply_markup=kb(
+                ["🎙 Говори голосом|voice_hint"],
+                ["← Меню|menu_main"],
+            )
+        )
         return
 
     # ── Resume агента ─────────────────────────────────────────────────────────
@@ -327,6 +345,18 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                        ["🤖 Сменить модель|profile_model"],
                        ["← Меню|menu_main"],
                    ))
+        return
+
+    if data == "onb_skip_push":
+        # Пользователь пропустил настройку времени пуша в онбординге
+        from db import get_onboarding_state
+        from flows.onboarding import _finish_onboarding
+        state = await get_onboarding_state(user_id)
+        if state:
+            # Помечаем push_enabled=False и завершаем онбординг
+            state.setdefault("data", {})["push_enabled"] = False
+            state["step"] = len(["niche", "audience", "tone", "push_time"])
+            await _finish_onboarding(update, user_id, state)
         return
 
     if data == "profile_edit":
@@ -756,6 +786,57 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await daily_send_now(ctx, user_id, ctx.bot)
         return
 
+    # ── Утренние пуши (Persona-style) ─────────────────────────────────────────
+    if data == "daily_push_menu":
+        from flows.daily_push import push_menu
+        await push_menu(update, user_id)
+        return
+
+    if data == "daily_push_on":
+        from flows.daily_push import (
+            get_push_settings, save_push_settings, schedule_daily_push, push_menu
+        )
+        s = await get_push_settings(user_id)
+        s["enabled"] = True
+        await save_push_settings(user_id, s)
+        try:
+            await schedule_daily_push(
+                ctx.application, user_id,
+                s.get("hour", 9), s.get("minute", 0)
+            )
+        except Exception as e:
+            logger.warning(f"schedule_daily_push failed: {e}")
+        await push_menu(update, user_id)
+        return
+
+    if data == "daily_push_off":
+        from flows.daily_push import get_push_settings, save_push_settings, push_menu
+        s = await get_push_settings(user_id)
+        s["enabled"] = False
+        await save_push_settings(user_id, s)
+        try:
+            for job in ctx.application.job_queue.get_jobs_by_name(f"daily_push_{user_id}"):
+                job.schedule_removal()
+        except Exception:
+            pass
+        await push_menu(update, user_id)
+        return
+
+    if data == "daily_push_time":
+        from db import save_agent_session as _sas
+        import utils as _utils
+        await _sas(user_id, "daily_push_time_flow", {"step": "await_time"})
+        await _utils.send(update,
+                          "⏰ Напиши время для утреннего пуша:\n_Например: 9:00 или 8:30_",
+                          parse_mode="Markdown",
+                          reply_markup=_utils.kb(["← Назад|daily_push_menu"]))
+        return
+
+    if data == "daily_push_test":
+        from flows.daily_push import daily_push_send_now
+        await daily_push_send_now(ctx, user_id, ctx.bot)
+        return
+
     # ── Стиль ─────────────────────────────────────────────────────────────────
     if data == "style_menu":
         await clear_agent_session(user_id, "style_flow")
@@ -780,12 +861,43 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
         await send(update, "🗑 Примеры стиля удалены.", reply_markup=kb(["← Кабинет|sub_cabinet"]))
         return
 
-    # ── Голосовое подтверждение ───────────────────────────────────────────────
+    # Пункт 4: принудительное завершение batch-сбора постов (кнопка «Завершить сбор»)
+    if data == "style_collect_done":
+        import json as _json
+        from db import kv_del as _kv_del, kv_get as _kv_get
+        raw = await _kv_get(user_id, "__collecting_posts__")
+        if raw:
+            session = _json.loads(raw)
+            collected = session.get("collected", [])
+            await _kv_del(user_id, "__collecting_posts__")
+            if collected:
+                await send(
+                    update,
+                    f"✅ Собрала {len(collected)} постов — анализирую твой голос... "
+                    f"Это займёт минуту 🔍",
+                )
+                import asyncio as _asyncio
+                from handlers.messages import finalize_voice_learning
+                _asyncio.create_task(finalize_voice_learning(collected, user_id, update))
+            else:
+                await send(
+                    update,
+                    "Пока не получила ни одного поста. "
+                    "Скинь хотя бы один — текстом или скриншотом 📸",
+                    reply_markup=kb(["← Назад|style_menu"]),
+                )
+        else:
+            await send(update, "Сбор постов не активен.", reply_markup=kb(["← Меню|menu_main"]))
+        return
+
+    # ── Голосовое подтверждение (устаревшее — голос теперь роутится напрямую) ──
     if data == "voice_send":
+        # Этот callback больше не используется — голос идёт сразу в routing
+        # Оставлен для совместимости со старыми сообщениями в чате
         pending = await kv_get(user_id, "__voice_pending__")
         await kv_del(user_id, "__voice_pending__")
         if not pending:
-            await edit(query, "Нет ожидающего запроса.", reply_markup=kb(["← Меню|menu_main"]))
+            await edit(query, "Запрос уже отправлен автоматически.", reply_markup=kb(["← Меню|menu_main"]))
             return
         await edit(query, f"🎙 _{pending}_", parse_mode="Markdown")
         from handlers.messages import _route
@@ -977,24 +1089,25 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                     _es["completed_actions"] = []
                     await save_agent_session(user_id, f"__ag_edit_{_active}__", _es)
                     from agents import _agent_edit_panel_kb
-                    from utils import send, kb
+                    import utils as _u
                     _panel_kb, _ = _agent_edit_panel_kb(_active)
-                    await send(update, f"{_es['original_result']}\n\n_🔙 Восстановлен первый результат._",
+                    await _u.send(update, f"{_es['original_result']}\n\n_🔙 Восстановлен первый результат._",
                                parse_mode="Markdown", reply_markup=_panel_kb)
                     return
         except Exception:
             pass
-        from utils import send, kb
-        await send(update, "Не удалось восстановить — оригинал не найден.", reply_markup=kb(["← Меню|menu_main"]))
+        import utils as _u
+        await _u.send(update, "Не удалось восстановить — оригинал не найден.", reply_markup=_u.kb(["← Меню|menu_main"]))
         return
 
     if data.startswith("ag_edit_"):
         edit_key_map = {
-            "ag_edit_softer":       "softer",
-            "ag_edit_bolder":       "bolder",
-            "ag_edit_shorter":      "shorter",
-            "ag_edit_detail":       "add_detail",
-            "ag_edit_cta":          "stronger_cta",
+            "ag_edit_softer":           "softer",
+            "ag_edit_softer_confirmed": "softer_confirmed",  # confirmed soften on conversion stage
+            "ag_edit_bolder":           "bolder",
+            "ag_edit_shorter":          "shorter",
+            "ag_edit_detail":           "add_detail",
+            "ag_edit_cta":              "stronger_cta",
             # Warmup-specific
             "ag_edit_resonance":    "resonance",
             "ag_edit_add_proof":    "add_proof",
