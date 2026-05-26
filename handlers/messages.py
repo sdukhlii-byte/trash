@@ -575,12 +575,18 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
 
     profile = await get_profile(user_id)
     intent  = await classify_intent(text, profile)
-    logger.info(f"[intent] user={user_id} agent={intent.agent} conf={intent.confidence:.2f}")
+    logger.info(f"[intent] user={user_id} agent={intent.agent} conf={intent.confidence:.2f} urgency={intent.urgency}")
 
     if intent.confidence >= CONFIDENCE_THRESHOLD and intent.agent != "chat":
         await kv_set(user_id, "__intent_ctx__", json.dumps({
             "agent": intent.agent, "text": text, "topic": intent.topic,
         }, ensure_ascii=False))
+
+        # Urgency — пользователь хочет результат немедленно, без интервью
+        if intent.urgency and intent.agent in _ONESHOT_PROMPTS:
+            result = await oneshot_generate(intent.agent, text, profile=profile)
+            await send(update, result, parse_mode="Markdown")
+            return
 
         main_cb = (
             "flow_reels_short" if intent.agent == "reels_short" else

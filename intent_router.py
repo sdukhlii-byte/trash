@@ -299,7 +299,11 @@ _CLASSIFIER_SYSTEM = (
     + "\n".join(f"- {k}: {v}" for k, v in AGENT_DESCRIPTIONS.items())
     + "\n- chat: общий вопрос про маркетинг, не подходит ни под один агент выше\n\n"
     "Верни ТОЛЬКО валидный JSON без markdown-блоков:\n"
-    "{\"agent\": \"<ключ>\", \"topic\": \"<тема/суть запроса в 3-7 словах>\", \"confidence\": <0.0-1.0>}\n\n"
+    "{\"agent\": \"<ключ>\", \"topic\": \"<тема/суть запроса в 3-7 словах>\", \"confidence\": <0.0-1.0>, \"urgency\": false}\n\n"
+    "urgency=true когда: пользователь явно просит генерировать немедленно "
+    "(\"сделай\", \"давай\", \"go ahead\", \"hazlo ya\"), "
+    "выражает усталость от вопросов, или уже дал достаточно контекста. "
+    "urgency=false — обычный запрос.\n\n"
     "Правила confidence:\n"
     "- 0.9+: запрос однозначно про конкретный формат контента\n"
     "- 0.7-0.9: очень вероятно нужен этот агент\n"
@@ -317,6 +321,7 @@ class IntentResult:
     agent:      str
     topic:      str
     confidence: float
+    urgency:    bool = False  # ← добавить
     raw:        str = ""
 
 
@@ -350,6 +355,7 @@ async def classify_intent(text: str, profile: dict | None = None) -> IntentResul
             agent=data.get("agent", "chat"),
             topic=data.get("topic", text[:50]),
             confidence=float(data.get("confidence", 0.5)),
+            urgency=bool(data.get("urgency", False)),
             raw=raw,
         )
     except Exception as e:

@@ -610,11 +610,46 @@ async def rs_generate_desc(update: Update, user_id: int, s: dict) -> None:
         pass
 
 
+async def oneshot_and_send(update: Update, user_id: int, text: str, s: dict) -> None:
+    """
+    Быстрая генерация через oneshot_generate когда urgency=True или вопросов уже ≥2.
+    Передаём накопленный контекст сессии.
+    """
+    from intent_router import oneshot_generate
+    profile = await get_profile(user_id)
+    accumulated_context = {
+        "topic":           s.get("topic", text),
+        "questions_asked": s.get("questions_asked", 0),
+        "session":         s,
+    }
+    status = await update.effective_chat.send_message("Генерирую сразу — без лишних вопросов ⚡")
+    try:
+        result = await oneshot_generate("reels_short", text, profile=profile)
+    except Exception as e:
+        logger.error(f"[reels] oneshot_and_send error: {e}")
+        await safe_delete(status)
+        await send(update, "Не вышло — попробуй ещё раз 🔁",
+                   reply_markup=kb(["🔁 Попробовать снова|rs_regen", "← Меню|menu_main"]))
+        return
+    await safe_delete(status)
+    s.update({"step": "done", "topic": text, "last_result": result, "headlines": result})
+    await save_agent_session(user_id, _RS_KEY, s)
+    await _save_rs_snapshot(user_id, s)
+    await _send_result(update, user_id, result, text, s)
+
+
 # ── Роутер текстовых сообщений ────────────────────────────────────────────────
 
 async def route_text(update: Update, user_id: int, text: str, s: dict) -> None:
     step = s.get("step", "")
     if step == "await_topic":
+        # В session добавляем счётчик вопросов
+        s["questions_asked"] = s.get("questions_asked", 0) + 1
+        await save_agent_session(user_id, _RS_KEY, s)
+
+        # Если уже ≥2 вопросов — сразу генерируем без доп. уточнений
+        if s["questions_asked"] >= 2:
+            return await oneshot_and_send(update, user_id, text, s)
         await rs_gen(update, user_id, text)
     elif step == "pick_for_desc":
         await rs_hook_chosen_for_desc(update, user_id, text, s)
