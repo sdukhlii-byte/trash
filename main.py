@@ -191,6 +191,10 @@ async def main() -> None:
     # 4. Строим PTB приложение
     ptb_app = build_app()
 
+    # Сохраняем глобальную ссылку для модулей без доступа к ctx
+    from bot_context import set_app
+    set_app(ptb_app)
+
     await ptb_app.initialize()
     await ptb_app.start()
     await _set_bot_commands(ptb_app.bot)
@@ -211,6 +215,15 @@ async def main() -> None:
         logger.info(f"Restored {len(daily_users)} daily jobs")
     except Exception as e:
         logger.error(f"Daily job restore failed: {e}")
+
+    # ── Daily Push (утренние пуши в стиле Persona) ────────────────────────────
+    try:
+        from flows.daily_push import setup_daily_push_jobs, restore_daily_push_jobs
+        setup_daily_push_jobs(ptb_app)
+        await restore_daily_push_jobs(ptb_app)
+        logger.info("Daily push jobs initialized")
+    except Exception as e:
+        logger.warning(f"Daily push setup failed: {e}")
 
     # 6. Retention push — запускаем фоновый job
     try:

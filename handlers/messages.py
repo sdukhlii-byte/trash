@@ -422,6 +422,38 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                        parse_mode="Markdown")
         return
 
+    # 2a2. Daily Push — установка времени
+    push_time_s = await get_agent_session(user_id, "daily_push_time_flow")
+    if push_time_s and push_time_s.get("step") == "await_time":
+        import re as _re
+        m = _re.match(r"(\d{1,2}):(\d{2})", text.strip())
+        if m:
+            hour_local = int(m.group(1))
+            minute = int(m.group(2))
+            tz_offset = 2  # UTC+2 (ES/HR/RS по умолчанию)
+            hour_utc = (hour_local - tz_offset) % 24
+            from flows.daily_push import get_push_settings, save_push_settings, schedule_daily_push
+            from db import clear_agent_session as _cas
+            s = await get_push_settings(user_id)
+            s.update({"hour": hour_utc, "minute": minute, "hour_local": hour_local})
+            await save_push_settings(user_id, s)
+            await _cas(user_id, "daily_push_time_flow")
+            if s.get("enabled"):
+                try:
+                    await schedule_daily_push(ctx.application, user_id, hour_utc, minute)
+                except Exception as e:
+                    logger.warning(f"reschedule daily push failed: {e}")
+            await send(
+                update,
+                f"✅ Время пушей обновлено: *{hour_local:02d}:{minute:02d}*",
+                parse_mode="Markdown",
+                reply_markup=kb(["☀️ Пуши|daily_push_menu", "← Меню|menu_main"]),
+            )
+        else:
+            await send(update, "Не понял формат. Напиши например: `9:00` или `08:30`",
+                       parse_mode="Markdown")
+        return
+
     # 2b. Планировщик
     planner_s = await get_agent_session(user_id, _PLANNER_KEY)
     if planner_s and await route_planner_text(update, user_id, text, planner_s):

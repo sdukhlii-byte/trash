@@ -329,6 +329,18 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
                    ))
         return
 
+    if data == "onb_skip_push":
+        # Пользователь пропустил настройку времени пуша в онбординге
+        from db import get_onboarding_state
+        from flows.onboarding import _finish_onboarding
+        state = await get_onboarding_state(user_id)
+        if state:
+            # Помечаем push_enabled=False и завершаем онбординг
+            state.setdefault("data", {})["push_enabled"] = False
+            state["step"] = len(["niche", "audience", "tone", "push_time"])
+            await _finish_onboarding(update, user_id, state)
+        return
+
     if data == "profile_edit":
         state = {"step": 0, "data": {}, "source": "profile_edit"}
         from db import save_onboarding_state
@@ -754,6 +766,56 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     if data == "daily_test":
         from flows.misc import daily_send_now
         await daily_send_now(ctx, user_id, ctx.bot)
+        return
+
+    # ── Утренние пуши (Persona-style) ─────────────────────────────────────────
+    if data == "daily_push_menu":
+        from flows.daily_push import push_menu
+        await push_menu(update, user_id)
+        return
+
+    if data == "daily_push_on":
+        from flows.daily_push import (
+            get_push_settings, save_push_settings, schedule_daily_push, push_menu
+        )
+        s = await get_push_settings(user_id)
+        s["enabled"] = True
+        await save_push_settings(user_id, s)
+        try:
+            await schedule_daily_push(
+                ctx.application, user_id,
+                s.get("hour", 9), s.get("minute", 0)
+            )
+        except Exception as e:
+            logger.warning(f"schedule_daily_push failed: {e}")
+        await push_menu(update, user_id)
+        return
+
+    if data == "daily_push_off":
+        from flows.daily_push import get_push_settings, save_push_settings, push_menu
+        s = await get_push_settings(user_id)
+        s["enabled"] = False
+        await save_push_settings(user_id, s)
+        try:
+            for job in ctx.application.job_queue.get_jobs_by_name(f"daily_push_{user_id}"):
+                job.schedule_removal()
+        except Exception:
+            pass
+        await push_menu(update, user_id)
+        return
+
+    if data == "daily_push_time":
+        from db import save_agent_session as _sas
+        await _sas(user_id, "daily_push_time_flow", {"step": "await_time"})
+        await send(update,
+                   "⏰ Напиши время для утреннего пуша:\n_Например: 9:00 или 8:30_",
+                   parse_mode="Markdown",
+                   reply_markup=kb(["← Назад|daily_push_menu"]))
+        return
+
+    if data == "daily_push_test":
+        from flows.daily_push import daily_push_send_now
+        await daily_push_send_now(ctx, user_id, ctx.bot)
         return
 
     # ── Стиль ─────────────────────────────────────────────────────────────────

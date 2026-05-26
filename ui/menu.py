@@ -37,8 +37,9 @@ def more_menu_kb() -> object:
         ["🎭 Анимация|agent_start_cartoon",           "🔄 Адаптация рилса|agent_start_reels_adapt"],
         ["📅 Контент-план TG|agent_start_tg_plan",    "🔎 Разбор конкурента|agent_start_competitor"],
         ["🔍 Разбор профиля|agent_start_profile",     "🧠 Мозговой штурм|quick_ideas"],
-        ["🗓 Планировщик|planner_show",               "☀️ Утренний брифинг|daily_menu"],
-        ["🩺 Диагностика контента|diagnostic_start",  "📈 Мой прогресс|my_stats"],
+        ["🗓 Планировщик|planner_show",               "☀️ Брифинг|daily_menu"],
+        ["🔔 Утренние пуши|daily_push_menu",          "📈 Мой прогресс|my_stats"],
+        ["🩺 Диагностика контента|diagnostic_start"],
         ["← Главное меню|menu_main"],
     )
 
