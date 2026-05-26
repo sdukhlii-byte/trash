@@ -666,6 +666,32 @@ async def _interview_step(update: Update, user_id: int,
         await send(update, clean_msg, parse_mode="Markdown")
         # Extract strategic signals from interview into CIP before generating
         await _extract_cip_from_interview(user_id, spec.key, session["history"])
+
+        # Pre-generation strategic brief (#7) for heavy tools
+        _BRIEF_TOOLS = ("warmup", "profile", "competitor")
+        if spec.key in _BRIEF_TOOLS:
+            try:
+                _brief_sys = (
+                    "На основе интервью сформулируй стратегический бриф — 3 строки, не больше. "
+                    "Формат:\n"
+                    "🎯 Главная задача: [одно конкретное предложение]\n"
+                    "⚡ Ключевой инсайт: [что важнее всего учесть]\n"
+                    "🛡 Главный риск: [что может пойти не так если не учесть]\n"
+                    "Только бриф. Без вступлений."
+                )
+                _brief_history = session["history"]
+                _brief = await llm.chat(_brief_history, system=_brief_sys, temperature=0.3)
+                if _brief and _brief.strip():
+                    session["pre_brief"] = _brief.strip()
+                    await save_agent_session(user_id, spec.key, session)
+                    await send(update,
+                        f"*Вот как я вижу задачу:*\n\n{_brief.strip()}\n\n"
+                        "Генерирую 🚀",
+                        parse_mode="Markdown"
+                    )
+            except Exception:
+                pass  # Brief is optional — don't block generation on error
+
         if spec.accept_photos:
             await _offer_photos(update, user_id, spec, session)
         elif spec.has_pick_step:
