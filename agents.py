@@ -227,6 +227,8 @@ def _agent_edit_panel_kb(spec_key: str, completed: set | None = None,
             rows.append(["💪 Усилить CTA|ag_edit_cta"])
 
     rows.append(["✏️ Доработать|refine_last", "🔄 Другой вариант|regen_last"])
+    if refinement_count >= 3:
+        rows.append(["🔙 Вернуться к первому результату|ag_restore_original"])
     rows.append([f"🔁 Заново|agent_restart_{spec_key}", "← Меню|menu_main"])
     return _kb(*rows), drift_warning
 
@@ -523,7 +525,7 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
     После завершения интервью извлекает стратегические сигналы в CIP:
     - warmup: audience_trust_level, audience_primary_objection, active_launch
     - competitor: positioning cue
-    - all: current_funnel_phase hint
+    - all: current_funnel_phase hint, audience_language_patterns
     Использует быстрый LLM-вызов с JSON-ответом.
     """
     if not history:
@@ -542,7 +544,9 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
             '"audience_primary_objection": "текст главного возражения", '
             '"active_launch": true/false, '
             '"audience_sophistication": "low|medium|high", '
-            '"current_funnel_phase": "awareness|consideration|conversion|retention"}'
+            '"current_funnel_phase": "awareness|consideration|conversion|retention", '
+            '"audience_language_patterns": "слова и фразы которыми аудитория сама описывает свои боли — извлеки из ответов пользователя", '
+            '"creator_voice_signature": "2-3 характерных речевых паттерна автора из интервью — короткие предложения / личные истории / конкретные цифры"}'
         )
         raw = await llm.complete(extract_system, interview_text, temperature=0.0)
         import json as _json
@@ -569,6 +573,14 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
             "awareness", "consideration", "conversion", "retention"
         ):
             cip["current_funnel_phase"] = data["current_funnel_phase"]
+        if "audience_language_patterns" in data and data["audience_language_patterns"]:
+            cip["audience_language_patterns"] = str(data["audience_language_patterns"])[:300]
+        if "creator_voice_signature" in data and data["creator_voice_signature"]:
+            # Накапливаем сигнатуру голоса, не перезаписываем
+            existing = cip.get("creator_voice_signature", "")
+            new_sig = str(data["creator_voice_signature"])[:200]
+            if new_sig not in existing:
+                cip["creator_voice_signature"] = (existing + " | " + new_sig).strip(" |")[:400]
         await save_cip(user_id, cip)
         logger.info(f"[cip_extract] user={user_id} agent={agent_key} → {data}")
     except Exception as e:
@@ -772,21 +784,66 @@ async def generate(update: Update, user_id: int,
         from db import get_cip, get_content_backlog
         cip = await get_cip(user_id)
         cip_parts = []
+
+        # ── СТРАТЕГИЧЕСКИЕ РЕШЕНИЯ (меняют весь подход к инструменту) ──
+        trust = cip.get("audience_trust_level", 0)
+        soph  = cip.get("audience_sophistication", "medium")
+        phase = cip.get("current_funnel_phase", "")
+
+        if trust and trust < 4:
+            cip_parts.append(
+                "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ (ХОЛОДНАЯ АУДИТОРИЯ, доверие < 4): "
+                "все хуки и заходы строить через УЗНАВАНИЕ и боль — не через авторитет автора. "
+                "Никаких 'я знаю как'. Только 'ты сталкивался с этим?'. "
+                "День 1 прогрева — ТОЛЬКО близость, ноль намёков на продукт."
+            )
+        elif trust and trust >= 8:
+            cip_parts.append(
+                "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ (ГОРЯЧАЯ АУДИТОРИЯ, доверие ≥ 8): "
+                "можно давать внутренние инсайты и unpopular opinions. "
+                "Identity-хуки работают лучше pain-хуков на этом уровне доверия."
+            )
+
+        if soph == "low":
+            cip_parts.append(
+                "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ (НОВИЧКИ): давай permission ('можно') и clarity ('вот как'). "
+                "Избегай жаргона ниши — используй язык которым аудитория сама описывает проблему."
+            )
+        elif soph == "high":
+            cip_parts.append(
+                "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ (ПРОДВИНУТАЯ АУДИТОРИЯ): давай insider perspective ('вот что видят только те кто внутри'). "
+                "Не разжёвывай базу — цени их время и уровень."
+            )
+
+        if phase == "awareness":
+            cip_parts.append(
+                "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ (ЭТАП AWARENESS): контент работает на виральность и узнавание. "
+                "CTA → любопытство (вопрос / DM / 'хочешь узнать больше?'). Никаких продажных элементов."
+            )
+        elif phase == "conversion":
+            cip_parts.append(
+                "СТРАТЕГИЧЕСКОЕ РЕШЕНИЕ (ЭТАП CONVERSION): контент работает на решение. "
+                "CTA → конкретное действие (ссылка / DM со словом / запись). "
+                "Усиливай конкретность обещания, убирай расплывчатые 'поможет', 'улучшит'."
+            )
+
+        # ── ФАКТИЧЕСКИЙ КОНТЕКСТ (информация для инструмента) ──
         if cip.get("recent_topics"):
             cip_parts.append(f"Недавние темы (не повторяй): {', '.join(cip['recent_topics'][-5:])}")
         if cip.get("hooks_that_worked"):
-            cip_parts.append(f"Хуки которые работали: {'; '.join(cip['hooks_that_worked'][-3:])}")
-        if cip.get("current_funnel_phase"):
-            cip_parts.append(f"Текущий этап воронки: {cip['current_funnel_phase']}")
-        if cip.get("audience_trust_level"):
-            cip_parts.append(f"Уровень доверия аудитории: {cip['audience_trust_level']}/10")
-        if cip.get("audience_sophistication") and cip["audience_sophistication"] != "medium":
-            _soph_map = {"low": "новички в теме — объясняй базово, без жаргона", "high": "продвинутая аудитория — пиши без разжёвывания, цени их время"}
-            cip_parts.append(f"Уровень аудитории: {_soph_map[cip['audience_sophistication']]}")
+            cip_parts.append(f"Хуки которые работали (мутируй, не повторяй): {'; '.join(cip['hooks_that_worked'][-3:])}")
+        if trust and 4 <= trust < 8:
+            cip_parts.append(f"Уровень доверия аудитории: {trust}/10")
         if cip.get("audience_primary_objection"):
-            cip_parts.append(f"Главное возражение аудитории: {cip['audience_primary_objection']}")
+            cip_parts.append(
+                f"Главное возражение аудитории: {cip['audience_primary_objection']} "
+                f"— учитывай при написании ВСЕХ инструментов, не только прогрева."
+            )
         if cip.get("positioning_statement"):
-            cip_parts.append(f"Позиционирование автора: {cip['positioning_statement']}")
+            cip_parts.append(f"Позиционирование автора: {cip['positioning_statement']} — используй при генерации хуков и заголовков.")
+        if cip.get("audience_language_patterns"):
+            cip_parts.append(f"Язык аудитории (используй в хуках): {cip['audience_language_patterns']}")
+
         # Format affinity: surfaces which formats the audience has responded to
         _affinity = cip.get("content_format_affinity", {})
         if _affinity:
@@ -812,6 +869,8 @@ async def generate(update: Update, user_id: int,
                 )
         if cip.get("active_launch"):
             cip_parts.append("АКТИВНЫЙ ЗАПУСК: контент должен поддерживать прогрев")
+        if cip.get("narrative_continuity"):
+            cip_parts.append(f"Незакрытые истории (можно продолжить): {cip['narrative_continuity']}")
         # For planner — inject backlog
         if spec.key in ("planner", "qi_start"):
             backlog = await get_content_backlog(user_id)
@@ -1123,6 +1182,9 @@ async def _after_result(update: Update, spec: AgentSpec, user_id: int) -> None:
                     _s = await get_agent_session(user_id, spec.key) or {}
                     _s["last_result"] = _content
                     _s["spec_key"]    = spec.key
+                    # Save original_result for drift recovery (🔙 button)
+                    if not _s.get("original_result"):
+                        _s["original_result"] = _content
                     # Persist strategic context so apply_edit can pass it to REFINE_SYSTEM
                     try:
                         from db import get_cip as _gcip
@@ -1267,6 +1329,35 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
     cip = await get_cip(user_id)
     funnel_stage = cip.get("current_funnel_phase", "awareness")
     audience_trust = cip.get("audience_trust_level", 5)
+
+    # Funnel-aware instruction override for context-sensitive edits
+    if edit_key == "bolder" and _spec_key not in ("warmup",):
+        if funnel_stage == "awareness" and audience_trust < 5:
+            instruction = (
+                "ЖЁСТЧЕ — но в рамках ДОВЕРИТЕЛЬНОГО фрейма (awareness + холодная аудитория): "
+                "усиль конфликт ТОЛЬКО в описании проблемы. "
+                "Не усиливай авторитетность — усиливай узнаваемость боли. "
+                "ЗАЩИЩЕНО: тон автора должен оставаться живым и человеческим."
+            )
+        elif funnel_stage == "conversion":
+            instruction = (
+                "ЖЁСТЧЕ — через срочность и конкретность (этап conversion): "
+                "усиль конкретность обещания, убери расплывчатые 'поможет', 'улучшит'. "
+                "Можно добавить конкретный срок если есть логическое основание. "
+                "ЗАЩИЩЕНО: не создавай искусственного дефицита — аудитория на этой стадии чувствует манипуляцию."
+            )
+
+    if edit_key == "softer" and funnel_stage == "conversion":
+        # Warn before softening a conversion text
+        await send(update,
+            "⚠️ *Смягчаю текст этапа конверсии — это может снизить эффективность CTA.*\n\n"
+            "Уверена что хочешь продолжить?",
+            parse_mode="Markdown",
+            reply_markup=kb([
+                "✅ Да, смягчить|ag_edit_softer_confirmed",
+                "← Назад|menu_main"
+            ]))
+        return
 
     system = (
         f"Ты — стратегический редактор контента. "

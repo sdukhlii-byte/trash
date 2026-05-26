@@ -963,6 +963,31 @@ async def _dispatch(update, ctx, query, user_id: int, data: str) -> None:
     # ── Панель доработки агентов (ag_edit_*) ─────────────────────────────────
     # Аналог car_edit_* в карусели — применяет правку к последнему результату
 
+    if data == "ag_restore_original":
+        # Восстанавливает первый результат (до всех правок)
+        from agents import get_agent_session, save_agent_session
+        from db import kv_get as _kvg
+        try:
+            _active = await _kvg(user_id, "__active_agent__")
+            if _active:
+                _es = await get_agent_session(user_id, f"__ag_edit_{_active}__")
+                if _es and _es.get("original_result"):
+                    _es["last_result"] = _es["original_result"]
+                    _es["refinement_count"] = 0
+                    _es["completed_actions"] = []
+                    await save_agent_session(user_id, f"__ag_edit_{_active}__", _es)
+                    from agents import _agent_edit_panel_kb
+                    from utils import send, kb
+                    _panel_kb, _ = _agent_edit_panel_kb(_active)
+                    await send(update, f"{_es['original_result']}\n\n_🔙 Восстановлен первый результат._",
+                               parse_mode="Markdown", reply_markup=_panel_kb)
+                    return
+        except Exception:
+            pass
+        from utils import send, kb
+        await send(update, "Не удалось восстановить — оригинал не найден.", reply_markup=kb(["← Меню|menu_main"]))
+        return
+
     if data.startswith("ag_edit_"):
         edit_key_map = {
             "ag_edit_softer":       "softer",
