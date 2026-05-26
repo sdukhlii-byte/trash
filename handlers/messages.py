@@ -580,6 +580,7 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
     if intent.confidence >= CONFIDENCE_THRESHOLD and intent.agent != "chat":
         await kv_set(user_id, "__intent_ctx__", json.dumps({
             "agent": intent.agent, "text": text, "topic": intent.topic,
+            "urgency": intent.urgency,
         }, ensure_ascii=False))
 
         # Urgency — пользователь хочет результат немедленно, без интервью
@@ -604,14 +605,14 @@ async def _route_inner(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             elif intent.agent == "carousel":
                 from db import clear_all_agent_sessions
                 await clear_all_agent_sessions(user_id)
-                await carousel.car_start(update, user_id)
+                await carousel.car_start(update, user_id, urgency=intent.urgency)
                 return
             else:
                 spec = ag.get_spec(intent.agent)
                 if spec:
                     from db import clear_all_agent_sessions
                     await clear_all_agent_sessions(user_id)
-                    await ag.start(update, user_id, spec)
+                    await ag.start(update, user_id, spec, urgency=intent.urgency)
                     return
 
         emoji_main = AGENT_EMOJI.get(intent.agent, "🤖")

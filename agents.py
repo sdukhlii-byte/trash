@@ -337,7 +337,8 @@ async def get_agent_session_safe(user_id: int, key: str) -> dict | None:
 
 # ── Engine ─────────────────────────────────────────────────────────────────────
 
-async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
+async def start(update: Update, user_id: int, spec: AgentSpec,
+                urgency: bool = False) -> None:
     # Проверяем доступ ДО создания сессии — нет смысла создавать если нет доступа
     from user_state import get_user_state, has_access
     from ui.paywall import show_paywall
@@ -351,6 +352,7 @@ async def start(update: Update, user_id: int, spec: AgentSpec) -> None:
         "agent_key": spec.key, "step": "initial",
         "initial": "", "history": [], "q_count": 0,
         "picked": "", "extra": {}, "photos": [],
+        "urgency": urgency,
     })
     from db import kv_set as _kv_set
     await _kv_set(user_id, "__active_agent__", spec.key)
@@ -396,6 +398,14 @@ async def handle_text(update: Update, user_id: int,
         await start(update, user_id, spec)
         return
     step = session.get("step", "initial")
+
+    # Urgency-триггер по счётчику: если накопилось достаточно ответов — форсируем генерацию
+    if step == "interview" and not session.get("urgency"):
+        q_count = session.get("q_count", 0)
+        if q_count >= spec.max_q:
+            session["urgency"] = True
+            await save_agent_session(user_id, spec.key, session)
+
     if   step == "initial":     await _first_message(update, user_id, spec, text, session)
     elif step == "interview":   await _interview_step(update, user_id, spec, text, session)
     elif step == "pick":        await _pick_step(update, user_id, spec, text, session)
@@ -632,6 +642,19 @@ async def _extract_cip_from_interview(user_id: int, agent_key: str, history: lis
 
 async def _interview_step(update: Update, user_id: int,
                            spec: AgentSpec, text: str, session: dict) -> None:
+    # Urgency bypass: пользователь хотел результат немедленно — пропускаем интервью
+    if session.get("urgency"):
+        session["initial"] = session.get("initial") or text
+        session["history"].append({"role": "user", "content": text})
+        await save_agent_session(user_id, spec.key, session)
+        if spec.accept_photos:
+            await _offer_photos(update, user_id, spec, session)
+        elif spec.has_pick_step:
+            await _gen_variants(update, user_id, spec, session)
+        else:
+            await generate(update, user_id, spec, session)
+        return
+
     ih = session["history"]
 
     # Off-topic guard: проверяем только если есть предыдущий вопрос от агента

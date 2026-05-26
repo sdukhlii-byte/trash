@@ -596,19 +596,38 @@ async def planner_gen_week(update: Update, user_id: int) -> None:
     profile = await get_profile(user_id)
     session = await get_agent_session(user_id, _PLANNER_KEY) or {}
 
-    # If we don't have the week goal yet — ask for it first
+    # If we don't have the week goal yet — ask for it first (unless urgency)
     if not session.get("week_goal"):
-        await save_agent_session(user_id, _PLANNER_KEY, {"step": "await_week_goal"})
-        await send(
-            update,
-            "🗓 *План на неделю*\n\nЧтобы план был стратегическим, а не просто списком — один вопрос:\n\n"
-            "*Что должна почувствовать или сделать аудитория в конце этой недели?*\n\n"
-            "_Например: записаться на консультацию / понять что им нужна твоя услуга / увидеть тебя как эксперта в X_\n\n"
-            "Если сейчас идёт прогрев или запуск — напиши об этом тоже.",
-            parse_mode="Markdown",
-            reply_markup=kb(["⏭ Без цели, просто план|planner_week_skip", "← Планировщик|planner_show"]),
-        )
-        return
+        # Check urgency from intent context
+        urgency = session.get("urgency", False)
+        if not urgency:
+            try:
+                from db import kv_get as _kv_get
+                import json as _json
+                _ctx_raw = await _kv_get(user_id, "__intent_ctx__")
+                if _ctx_raw:
+                    _ctx = _json.loads(_ctx_raw)
+                    urgency = bool(_ctx.get("urgency"))
+            except Exception:
+                pass
+
+        if urgency:
+            # Bypass: генерируем без цели
+            session["week_goal"] = "без конкретной цели — сбалансированный план"
+            session["urgency"] = True
+            await save_agent_session(user_id, _PLANNER_KEY, session)
+        else:
+            await save_agent_session(user_id, _PLANNER_KEY, {"step": "await_week_goal"})
+            await send(
+                update,
+                "🗓 *План на неделю*\n\nЧтобы план был стратегическим, а не просто списком — один вопрос:\n\n"
+                "*Что должна почувствовать или сделать аудитория в конце этой недели?*\n\n"
+                "_Например: записаться на консультацию / понять что им нужна твоя услуга / увидеть тебя как эксперта в X_\n\n"
+                "Если сейчас идёт прогрев или запуск — напиши об этом тоже.",
+                parse_mode="Markdown",
+                reply_markup=kb(["⏭ Без цели, просто план|planner_week_skip", "← Планировщик|planner_show"]),
+            )
+            return
 
     today = datetime.date.today()
     dates = [(today + datetime.timedelta(days=i)).strftime("%d.%m (%a)") for i in range(7)]
@@ -665,6 +684,12 @@ async def planner_add_start(update: Update, user_id: int) -> None:
 async def route_planner_text(update: Update, user_id: int, text: str, s: dict) -> bool:
     step = s.get("step", "")
     if step == "await_week_goal":
+        # Urgency bypass: если флаг выставлен — генерируем план без цели
+        if s.get("urgency"):
+            s["week_goal"] = ""
+            await save_agent_session(user_id, _PLANNER_KEY, s)
+            await planner_gen_week(update, user_id)
+            return True
         # User answered the week goal question — store and generate
         s["week_goal"] = text.strip()
         # Check if launch mentioned
