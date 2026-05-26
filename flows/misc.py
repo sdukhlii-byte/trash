@@ -705,11 +705,7 @@ async def pregen_digest(user_id: int) -> str | None:
         f"Дата: {today}"
     )
     try:
-        _tt = asyncio.create_task(_typing_loop(update.effective_chat))
-        try:
-            result = await complete(DAILY_DIGEST_SYSTEM, prompt, temperature=0.85)
-        finally:
-            _tt.cancel()
+        result = await complete(DAILY_DIGEST_SYSTEM, prompt, temperature=0.85)
         if result and result.strip():
             await _cache_digest(user_id, result)
             return result

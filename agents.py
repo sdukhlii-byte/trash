@@ -25,9 +25,14 @@ from db import (
     get_agent_session, save_agent_session, clear_agent_session,
     get_profile, save_result, get_style_examples,
 )
-from utils import send, kb, safe_delete
+from utils import send, kb, safe_delete, typing_loop
 from voice_learner import build_voice_context, voice_feedback_kb
 from niche_intel import build_niche_context
+
+# Keys used for routing in apply_edit — imported from their respective flows
+# to avoid NameError when checking the active agent type.
+from flows.reels import _RS_KEY
+from flows.carousel import _CAR_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -977,8 +982,7 @@ async def apply_agent_edit(update: Update, user_id: int, edit_key: str) -> None:
 
     status = await update.effective_chat.send_message("Переписываю...")
     import asyncio as _aio
-    from utils import typing_loop as _tl
-    _tt = _aio.create_task(_tl(update.effective_chat))
+    _tt = _aio.create_task(typing_loop(update.effective_chat))
     try:
         from llm import complete_long
         new_result = await complete_long(system, instruction, model_key="claude", temperature=0.8)
