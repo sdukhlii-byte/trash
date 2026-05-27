@@ -7,6 +7,7 @@ voice_level_label() из progress_bar, один источник правды.
 """
 import logging
 from datetime import datetime, timezone
+from lava_payments import _parse_dt
 
 from telegram import Update
 
@@ -24,7 +25,7 @@ async def _get_streak(user_id: int) -> int:
         raw = await kv_get(user_id, _STREAK_KEY)
         if raw:
             data = __import__("json").loads(raw)
-            last_date = datetime.fromisoformat(data["last_date"])
+            last_date = _parse_dt(data["last_date"])
             streak = data.get("streak", 1)
             today = datetime.now(timezone.utc).date()
             diff = (today - last_date.date()).days
@@ -46,7 +47,7 @@ async def _update_streak(user_id: int) -> int:
         raw = await kv_get(user_id, _STREAK_KEY)
         if raw:
             data = json.loads(raw)
-            last_date = datetime.fromisoformat(data["last_date"])
+            last_date = _parse_dt(data["last_date"])
             streak = data.get("streak", 1)
             diff = (today.date() - last_date.date()).days
             if diff == 0:
