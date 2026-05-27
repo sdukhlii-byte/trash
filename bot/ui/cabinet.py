@@ -93,7 +93,8 @@ async def maybe_show_upsell(update: Update, user_id: int) -> None:
         return
 
     from datetime import datetime, timezone
-    expires = datetime.fromisoformat(trial["expires_at"])
+    from lava_payments import _parse_dt
+    expires = _parse_dt(trial["expires_at"])
     days_left = max(0, (expires - datetime.now(timezone.utc)).days)
 
     if days_left <= 1:
