@@ -62,28 +62,44 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     logger.info({ telegramId: tgUser.id }, 'POST /auth/telegram — upserting user')
 
     // Upsert user
-    const user = await prisma.user.upsert({
-      where: { telegramId: BigInt(tgUser.id) },
-      update: {
-        firstName:    tgUser.first_name,
-        lastName:     tgUser.last_name,
-        username:     tgUser.username,
-        languageCode: tgUser.language_code,
-        lastActiveAt: new Date(),
-      },
-      create: {
-        telegramId:   BigInt(tgUser.id),
-        firstName:    tgUser.first_name,
-        lastName:     tgUser.last_name,
-        username:     tgUser.username,
-        languageCode: tgUser.language_code,
-      },
-      include: {
-        creatorProfile: true,
-        subscription:   true,
-        trial:          true,
-      },
-    })
+    let user: any
+    try {
+      user = await prisma.user.upsert({
+        where: { telegramId: BigInt(tgUser.id) },
+        update: {
+          firstName:    tgUser.first_name,
+          lastName:     tgUser.last_name,
+          username:     tgUser.username,
+          languageCode: tgUser.language_code,
+          lastActiveAt: new Date(),
+        },
+        create: {
+          telegramId:   BigInt(tgUser.id),
+          firstName:    tgUser.first_name,
+          lastName:     tgUser.last_name,
+          username:     tgUser.username,
+          languageCode: tgUser.language_code,
+        },
+        include: {
+          creatorProfile: true,
+          subscription:   true,
+          trial:          true,
+        },
+      })
+    } catch (dbErr: any) {
+      logger.error({
+        err: dbErr,
+        code: dbErr?.code,
+        meta: dbErr?.meta,
+        telegramId: tgUser.id,
+      }, 'POST /auth/telegram — DB upsert failed')
+      return reply.code(500).send({
+        ok: false,
+        error: 'Database error',
+        code: 'DB_ERROR',
+        detail: dbErr?.message ?? 'unknown',
+      })
+    }
 
     const state = await getUserState(user.id)
 

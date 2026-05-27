@@ -97,8 +97,8 @@ export class RefinementService {
         toolKey:       gen.toolKey,
         currentContent: gen.content,
         metadata:      req.metadata,
-        creatorProfile: creatorProfile,
-        voiceProfile:  voiceProfile,
+        creatorProfile: creatorProfile as any,
+        voiceProfile:  voiceProfile as any,
       })
 
       // 8. Call LLM
