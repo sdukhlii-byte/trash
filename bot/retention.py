@@ -556,7 +556,8 @@ async def push_trial_warning(bot: Bot, user_id: int) -> None:
     if not trial:
         return
 
-    exp = datetime.fromisoformat(trial["expires_at"])
+    from lava_payments import _parse_dt
+    exp = _parse_dt(trial["expires_at"])
     hours_left = int((exp - datetime.now(timezone.utc)).total_seconds() / 3600)
 
     text = (
