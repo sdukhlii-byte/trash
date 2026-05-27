@@ -27,6 +27,19 @@ import os
 import secrets
 from datetime import datetime, timezone, timedelta
 
+
+def _parse_dt(value) -> datetime:
+    """Parse datetime from DB — always returns timezone-aware (UTC) datetime."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    s = str(value)
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
 from aiohttp import web
 from telegram import Bot
 
@@ -720,7 +733,7 @@ async def _notify_user(bot: Bot, user_id: int, tier: str, event_type: str) -> No
     sub = await get_subscription(user_id)
     expires_str = ""
     if sub:
-        exp = datetime.fromisoformat(sub["expires_at"])
+        exp = _parse_dt(sub["expires_at"])
         expires_str = exp.strftime("%d.%m.%Y")
 
     if event_type == "SUBSCRIPTION_RENEWAL":
@@ -822,7 +835,7 @@ async def render_status(user_id: int) -> str:
     now = datetime.now(timezone.utc)
     sub = await get_subscription(user_id)
     if sub:
-        exp = datetime.fromisoformat(sub["expires_at"])
+        exp = _parse_dt(sub["expires_at"])
         days_left = (exp - now).days
         label = TIER_LABELS.get(sub.get("tier", ""), "?")
         return (
@@ -834,7 +847,7 @@ async def render_status(user_id: int) -> str:
 
     trial = await get_trial(user_id)
     if trial:
-        exp = datetime.fromisoformat(trial["expires_at"])
+        exp = _parse_dt(trial["expires_at"])
         days_left  = max(0, (exp - now).days)
         hours_left = max(0, (exp - now).total_seconds() / 3600)
         from ui.progress_bar import trial_urgency
@@ -861,7 +874,7 @@ async def render_history(user_id: int) -> str:
 
     lines = ["🧾 *История платежей*\n"]
     for p in payments:
-        dt = datetime.fromisoformat(p["created_at"]).strftime("%d.%m.%Y")
+        dt = _parse_dt(p["created_at"]).strftime("%d.%m.%Y")
         tier_label = TIER_LABELS.get(p["tier"], p["tier"] or "?")
         etype = "продление" if p["event_type"] == "SUBSCRIPTION_RENEWAL" else "подписка"
         lines.append(f"• {dt} — {tier_label} — €{p['amount']:.0f} ({etype})")
